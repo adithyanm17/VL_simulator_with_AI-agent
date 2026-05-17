@@ -598,6 +598,7 @@ class VerilogIDE(QMainWindow):
         prompt = self.ai_worker.messages[-1]["content"]
         self.chat_history.append({"role": "user", "content": prompt})
         self.chat_history.append({"role": "assistant", "content": response})
+        self.save_ai_memory()
         
         # Display response
         self.ai_output.append(f"<b>AI ({self.ai_worker.model}):</b><br><pre>{html.escape(response)}</pre>")
@@ -674,7 +675,44 @@ class VerilogIDE(QMainWindow):
         self.tree_view.setRootIndex(self.file_system_model.index(dir_path))
         self.console_output.appendPlainText(f"Opened project: {dir_path}")
         self.save_config("last_project", dir_path)
+        self.load_ai_memory()
         
+    def load_ai_memory(self):
+        self.chat_history = []
+        self.ai_output.clear()
+        if not self.current_project_dir: return
+        
+        mem_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_memories.json")
+        if os.path.exists(mem_file):
+            try:
+                with open(mem_file, "r") as f:
+                    data = json.load(f)
+                if self.current_project_dir in data:
+                    self.chat_history = data[self.current_project_dir]
+                    for msg in self.chat_history:
+                        if msg["role"] == "system": continue
+                        role = "You" if msg["role"] == "user" else "AI"
+                        self.ai_output.append(f"<b>{role}:</b><br><pre>{html.escape(msg['content'])}</pre>")
+            except:
+                pass
+
+    def save_ai_memory(self):
+        if not self.current_project_dir: return
+        mem_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_memories.json")
+        data = {}
+        if os.path.exists(mem_file):
+            try:
+                with open(mem_file, "r") as f:
+                    data = json.load(f)
+            except:
+                pass
+        data[self.current_project_dir] = self.chat_history
+        try:
+            with open(mem_file, "w") as f:
+                json.dump(data, f)
+        except:
+            pass
+
     def load_example(self, example_folder):
         base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples")
         ex_path = os.path.join(base_dir, example_folder)
