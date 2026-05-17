@@ -2,6 +2,9 @@ import sys
 import os
 import json
 import subprocess
+import urllib.request
+import urllib.error
+import re
 from example_codes import EXAMPLES
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -12,7 +15,34 @@ from PyQt6.QtWidgets import (
 )
 import html
 from PyQt6.QtGui import QAction, QKeySequence, QFont, QIcon, QColor, QPainter, QPen, QFileSystemModel, QTextFormat
-from PyQt6.QtCore import Qt, QDir, QSize, QRect
+from PyQt6.QtCore import Qt, QDir, QSize, QRect, QThread, pyqtSignal
+
+class OllamaWorker(QThread):
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, model, messages):
+        super().__init__()
+        self.model = model
+        self.messages = messages
+
+    def run(self):
+        url = "http://localhost:11434/api/chat"
+        data = {
+            "model": self.model,
+            "messages": self.messages,
+            "stream": False
+        }
+        
+        try:
+            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                self.finished.emit(result.get("message", {}).get("content", ""))
+        except urllib.error.URLError as e:
+            self.error.emit(f"Failed to connect to Ollama. Make sure Ollama is running locally. Error: {str(e)}")
+        except Exception as e:
+            self.error.emit(f"An error occurred: {str(e)}")
 
 class LineNumberArea(QWidget):
     def __init__(self, editor):
@@ -208,6 +238,7 @@ class VerilogIDE(QMainWindow):
         self.setWindowTitle("Verilog Studio IDE (Vivado Style)")
         self.resize(1280, 800)
         self.current_project_dir = None
+        self.chat_history = []
         
         self.load_themes()
         self.setup_ui()
@@ -412,13 +443,170 @@ class VerilogIDE(QMainWindow):
         
         self.tabifyDockWidget(self.ila_dock, self.console_dock)
         
+        # Dock: AI Assistant
+        self.ai_dock = QDockWidget("AI Coding Assistant", self)
+        self.ai_dock.setMinimumWidth(350)
+        ai_widget = QWidget()
+        ai_layout = QVBoxLayout(ai_widget)
+        
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(QLabel("Model:"))
+        self.ai_model_combo = QComboBox()
+        self.ai_model_combo.addItems(["llama3.2:1b", "llama3", "qwen3.5:4b", "deepseek-coder"])
+        model_layout.addWidget(self.ai_model_combo)
+        
+        self.ai_refresh_btn = QPushButton("Refresh Models")
+        self.ai_refresh_btn.clicked.connect(self.refresh_ollama_models)
+        model_layout.addWidget(self.ai_refresh_btn)
+        ai_layout.addLayout(model_layout)
+        
+        self.ai_output = QTextEdit()
+        self.ai_output.setReadOnly(True)
+        ai_layout.addWidget(self.ai_output)
+        
+        self.ai_input = QTextEdit()
+        self.ai_input.setMaximumHeight(100)
+        self.ai_input.setPlaceholderText("Ask AI to write or explain Verilog code...\n(AI remembers chat context and creates files)")
+        ai_layout.addWidget(self.ai_input)
+        
+        btn_layout = QHBoxLayout()
+        self.ai_ask_btn = QPushButton("Ask AI")
+        self.ai_ask_btn.clicked.connect(self.ask_ai)
+        self.ai_clear_btn = QPushButton("Clear Memory")
+        self.ai_clear_btn.clicked.connect(self.clear_ai_memory)
+        
+        btn_layout.addWidget(self.ai_ask_btn)
+        btn_layout.addWidget(self.ai_clear_btn)
+        ai_layout.addLayout(btn_layout)
+        
+        self.ai_dock.setWidget(ai_widget)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
+        self.tabifyDockWidget(self.vio_dock, self.ai_dock)
+        self.ai_dock.raise_()
+        
         # Add dock widgets to Windows menu
         self.windows_menu.addAction(self.proj_dock.toggleViewAction())
         self.windows_menu.addAction(self.vio_dock.toggleViewAction())
         self.windows_menu.addAction(self.ila_dock.toggleViewAction())
         self.windows_menu.addAction(self.console_dock.toggleViewAction())
+        self.windows_menu.addAction(self.ai_dock.toggleViewAction())
 
         self.new_file() # Start with an empty file
+        
+        # Try to load available models
+        self.refresh_ollama_models()
+
+    def refresh_ollama_models(self):
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags")
+            with urllib.request.urlopen(req, timeout=2) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                models = [m["name"] for m in result.get("models", [])]
+                if models:
+                    current = self.ai_model_combo.currentText()
+                    self.ai_model_combo.clear()
+                    self.ai_model_combo.addItems(models)
+                    if current in models:
+                        self.ai_model_combo.setCurrentText(current)
+                    elif "llama3.2:1b" in models:
+                        self.ai_model_combo.setCurrentText("llama3.2:1b")
+        except Exception:
+            pass # Fail silently if ollama isn't running yet
+
+    def clear_ai_memory(self):
+        self.chat_history = []
+        self.ai_output.append("<br><i>Chat memory cleared.</i>")
+
+    def ask_ai(self):
+        prompt = self.ai_input.toPlainText().strip()
+        if not prompt: return
+        
+        model = self.ai_model_combo.currentText() or "llama3.2:1b"
+            
+        self.ai_ask_btn.setEnabled(False)
+        self.ai_output.append(f"<br><b>You:</b> {html.escape(prompt)}")
+        self.ai_output.append("<i>Generating...</i>")
+        self.ai_input.clear()
+        
+        context = ""
+        active_file_name = "Untitled"
+        target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
+        current_editor = target_tabs.currentWidget()
+        if current_editor:
+            context = current_editor.toPlainText()
+            idx = target_tabs.indexOf(current_editor)
+            if idx >= 0:
+                active_file_name = target_tabs.tabText(idx)
+            
+        system_prompt = (
+            "You are an advanced AI coding assistant integrated into a Verilog IDE.\n"
+            "You can create or edit files directly. To create a new file, your response MUST contain exactly:\n"
+            "[CREATE_FILE: filename.v]\n```verilog\n// complete code here\n```\n\n"
+            "To completely replace/edit the currently active file, use exactly:\n"
+            "[EDIT_ACTIVE_FILE]\n```verilog\n// complete new code here\n```\n\n"
+            "Always output the full file content without placeholders when using these tags."
+        )
+        
+        if context:
+            system_prompt += f"\n\nCURRENT ACTIVE FILE ({active_file_name}):\n```verilog\n{context}\n```"
+            
+        messages = [{"role": "system", "content": system_prompt}] + self.chat_history + [{"role": "user", "content": prompt}]
+            
+        self.ai_worker = OllamaWorker(model, messages)
+        self.ai_worker.finished.connect(self.on_ai_finished)
+        self.ai_worker.error.connect(self.on_ai_error)
+        self.ai_worker.start()
+
+    def on_ai_finished(self, response):
+        self.ai_ask_btn.setEnabled(True)
+        cursor = self.ai_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.select(cursor.SelectionType.BlockUnderCursor)
+        cursor.removeSelectedText()
+        
+        # Add to chat history
+        prompt = self.ai_worker.messages[-1]["content"]
+        self.chat_history.append({"role": "user", "content": prompt})
+        self.chat_history.append({"role": "assistant", "content": response})
+        
+        # Display response
+        self.ai_output.append(f"<b>AI ({self.ai_worker.model}):</b><br><pre>{html.escape(response)}</pre>")
+        
+        # Parse for creations/edits
+        create_matches = re.finditer(r'\[CREATE_FILE:\s*(.+?)\]\s*```(?:verilog|v)?\n(.*?)```', response, re.DOTALL)
+        for match in create_matches:
+            filename = match.group(1).strip()
+            code = match.group(2)
+            if self.current_project_dir:
+                filepath = os.path.join(self.current_project_dir, filename)
+                try:
+                    with open(filepath, 'w') as f:
+                        f.write(code)
+                    self.open_file(filepath)
+                    self.ai_output.append(f"<i style='color:green;'>Created and opened file: {filename}</i>")
+                except Exception as e:
+                    self.ai_output.append(f"<b style='color:red;'>Failed to create file {filename}: {e}</b>")
+            else:
+                self.ai_output.append("<b style='color:red;'>Cannot create file. Please open or create a project first.</b>")
+                
+        edit_matches = re.finditer(r'\[EDIT_ACTIVE_FILE\]\s*```(?:verilog|v)?\n(.*?)```', response, re.DOTALL)
+        for match in edit_matches:
+            code = match.group(1)
+            target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
+            current_editor = target_tabs.currentWidget()
+            if current_editor:
+                current_editor.setPlainText(code)
+                self.ai_output.append("<i style='color:green;'>Updated active file.</i>")
+            else:
+                self.ai_output.append("<b style='color:red;'>No active file to edit.</b>")
+
+    def on_ai_error(self, error):
+        self.ai_ask_btn.setEnabled(True)
+        cursor = self.ai_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.select(cursor.SelectionType.BlockUnderCursor)
+        cursor.removeSelectedText()
+        self.ai_output.append(f"<b style='color:red;'>Error:</b> {error}")
 
     def new_project(self):
         dlg = NewProjectDialog(self)
