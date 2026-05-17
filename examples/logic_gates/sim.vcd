@@ -1,0 +1,64 @@
+$date
+	Sun May 17 14:55:04 2026
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1s
+$end
+$scope module tb_logic_gates $end
+$var wire 1 ! out_xor $end
+$var wire 1 " out_xnor $end
+$var wire 1 # out_or $end
+$var wire 1 $ out_not_a $end
+$var wire 1 % out_nor $end
+$var wire 1 & out_nand $end
+$var wire 1 ' out_and $end
+$var reg 1 ( a $end
+$var reg 1 ) b $end
+$scope module uut $end
+$var wire 1 ( a $end
+$var wire 1 ) b $end
+$var wire 1 ' out_and $end
+$var wire 1 & out_nand $end
+$var wire 1 % out_nor $end
+$var wire 1 $ out_not_a $end
+$var wire 1 # out_or $end
+$var wire 1 " out_xnor $end
+$var wire 1 ! out_xor $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+$comment Show the parameter values. $end
+$dumpall
+$end
+#0
+$dumpvars
+0)
+0(
+0'
+1&
+1%
+1$
+0#
+1"
+0!
+$end
+#10
+0%
+0"
+1#
+1!
+1)
+#20
+0$
+0)
+1(
+#30
+0&
+1"
+1'
+0!
+1)
+#40

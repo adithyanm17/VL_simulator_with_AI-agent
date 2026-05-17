@@ -1,0 +1,73 @@
+# Verilog Coding Quick Reference
+
+This document provides a brief overview of standard Verilog operators, keywords, and syntax constructs. You can use this as a reference while building your testbenches and modules in this IDE.
+
+## 1. Bitwise Operators
+These operate on variables bit-by-bit.
+
+* `~`  : Bitwise NOT (Invert all bits)
+* `&`  : Bitwise AND
+* `|`  : Bitwise OR
+* `^`  : Bitwise XOR (Exclusive OR)
+* `~^` or `^~` : Bitwise XNOR (Exclusive NOR)
+
+**Example:**
+`assign out = a & b; // Bitwise AND of a and b`
+
+## 2. Logical Operators
+These evaluate to a single bit (1 for True, 0 for False). Used mostly in `if` statements.
+
+* `!`  : Logical NOT
+* `&&` : Logical AND
+* `||` : Logical OR
+
+**Example:**
+`if (enable && !reset) begin ... end`
+
+## 3. Reduction Operators
+These operate on all bits of a single vector to produce a 1-bit result.
+
+* `&`  : Reduction AND (True if all bits are 1)
+* `|`  : Reduction OR (True if any bit is 1)
+* `^`  : Reduction XOR (True if odd number of 1s)
+
+**Example:**
+`wire all_ones = &count[3:0];`
+
+## 4. Arithmetic Operators
+
+* `+`  : Addition
+* `-`  : Subtraction
+* `*`  : Multiplication
+* `/`  : Division
+* `%`  : Modulus (Remainder)
+
+## 5. Shift Operators
+
+* `<<` : Logical Left Shift (shifts in 0s)
+* `>>` : Logical Right Shift (shifts in 0s)
+* `<<<`: Arithmetic Left Shift
+* `>>>`: Arithmetic Right Shift (preserves sign bit)
+
+## 6. Concatenation and Replication
+
+* `{a, b}` : Concatenates `a` and `b` together.
+* `{4{a}}` : Replicates `a` four times (e.g., `a, a, a, a`).
+
+**Example:**
+`assign bus[7:0] = {4'b0000, nibble[3:0]};`
+
+## 7. Common Keywords & Structures
+
+* `module` / `endmodule` : Defines a hardware block.
+* `input` / `output` / `inout` : Port directions.
+* `wire` : A physical connection (cannot hold a value, must be driven by `assign`).
+* `reg`  : A register/variable that holds a value (used inside `always` or `initial` blocks).
+* `assign` : Continuous assignment (for combinational logic).
+* `always @(...)` : Procedural block that triggers on changes.
+    * `always @(posedge clk)` : Triggers on rising edge of clock (Flip-Flops).
+    * `always @(*)` : Triggers whenever any input changes (Combinational logic).
+* `initial` : Block that runs exactly once at time zero (used for testbenches).
+* `$display("...");` : Prints to the terminal / debug console.
+* `$finish;` : Ends the simulation.
+* `#10` : Delays execution by 10 time units (used in testbenches).
