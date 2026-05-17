@@ -5,6 +5,7 @@ import subprocess
 import urllib.request
 import urllib.error
 import re
+import shutil
 from example_codes import EXAMPLES
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -25,6 +26,9 @@ class OllamaWorker(QThread):
         super().__init__()
         self.model = model
         self.messages = messages
+
+    def stop(self):
+        self.terminate()
 
     def run(self):
         url = "http://localhost:11434/api/chat"
@@ -237,6 +241,8 @@ class VerilogIDE(QMainWindow):
         super().__init__()
         self.setWindowTitle("Verilog Studio IDE (Vivado Style)")
         self.resize(1280, 800)
+        self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setCorner(Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
         self.current_project_dir = None
         self.chat_history = []
         
@@ -445,7 +451,7 @@ class VerilogIDE(QMainWindow):
         
         # Dock: AI Assistant
         self.ai_dock = QDockWidget("AI Coding Assistant", self)
-        self.ai_dock.setMinimumWidth(350)
+        self.ai_dock.setMinimumWidth(450)
         ai_widget = QWidget()
         ai_layout = QVBoxLayout(ai_widget)
         
@@ -460,28 +466,42 @@ class VerilogIDE(QMainWindow):
         model_layout.addWidget(self.ai_refresh_btn)
         ai_layout.addLayout(model_layout)
         
+        font_ai = QFont("Consolas", 10)
         self.ai_output = QTextEdit()
         self.ai_output.setReadOnly(True)
+        self.ai_output.setFont(font_ai)
         ai_layout.addWidget(self.ai_output)
         
+        input_layout = QHBoxLayout()
         self.ai_input = QTextEdit()
-        self.ai_input.setMaximumHeight(100)
-        self.ai_input.setPlaceholderText("Ask AI to write or explain Verilog code...\n(AI remembers chat context and creates files)")
-        ai_layout.addWidget(self.ai_input)
+        self.ai_input.setMaximumHeight(80)
+        self.ai_input.setFont(font_ai)
+        self.ai_input.setPlaceholderText("Message AI...")
+        input_layout.addWidget(self.ai_input)
         
-        btn_layout = QHBoxLayout()
-        self.ai_ask_btn = QPushButton("Ask AI")
-        self.ai_ask_btn.clicked.connect(self.ask_ai)
-        self.ai_clear_btn = QPushButton("Clear Memory")
-        self.ai_clear_btn.clicked.connect(self.clear_ai_memory)
+        btn_layout = QVBoxLayout()
+        self.ai_send_btn = QPushButton("➤")
+        self.ai_send_btn.setFixedSize(40, 35)
+        self.ai_send_btn.setFont(QFont("Segoe UI", 14))
+        self.ai_send_btn.clicked.connect(self.ask_ai)
         
-        btn_layout.addWidget(self.ai_ask_btn)
-        btn_layout.addWidget(self.ai_clear_btn)
-        ai_layout.addLayout(btn_layout)
+        self.ai_stop_btn = QPushButton("⏹")
+        self.ai_stop_btn.setFixedSize(40, 35)
+        self.ai_stop_btn.setFont(QFont("Segoe UI", 12))
+        self.ai_stop_btn.clicked.connect(self.stop_ai)
+        self.ai_stop_btn.setEnabled(False)
+        
+        btn_layout.addWidget(self.ai_send_btn)
+        btn_layout.addWidget(self.ai_stop_btn)
+        input_layout.addLayout(btn_layout)
+        
+        ai_layout.addLayout(input_layout)
         
         self.ai_dock.setWidget(ai_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
-        self.tabifyDockWidget(self.vio_dock, self.ai_dock)
+        
+        # Make AI Dock full height, tabify vio dock with console
+        self.tabifyDockWidget(self.console_dock, self.vio_dock)
         self.ai_dock.raise_()
         
         # Add dock widgets to Windows menu
@@ -513,9 +533,16 @@ class VerilogIDE(QMainWindow):
         except Exception:
             pass # Fail silently if ollama isn't running yet
 
-    def clear_ai_memory(self):
-        self.chat_history = []
-        self.ai_output.append("<br><i>Chat memory cleared.</i>")
+    def stop_ai(self):
+        if hasattr(self, 'ai_worker') and self.ai_worker.isRunning():
+            self.ai_worker.stop()
+            self.ai_send_btn.setEnabled(True)
+            self.ai_stop_btn.setEnabled(False)
+            cursor = self.ai_output.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            cursor.select(cursor.SelectionType.BlockUnderCursor)
+            cursor.removeSelectedText()
+            self.ai_output.append("<i style='color:orange;'>Stopped.</i>")
 
     def ask_ai(self):
         prompt = self.ai_input.toPlainText().strip()
@@ -523,10 +550,10 @@ class VerilogIDE(QMainWindow):
         
         model = self.ai_model_combo.currentText() or "llama3.2:1b"
             
-        self.ai_ask_btn.setEnabled(False)
+        self.ai_send_btn.setEnabled(False)
+        self.ai_stop_btn.setEnabled(True)
         self.ai_output.append(f"<br><b>You:</b> {html.escape(prompt)}")
         self.ai_output.append("<i>Generating...</i>")
-        self.ai_input.clear()
         
         context = ""
         active_file_name = "Untitled"
@@ -558,11 +585,14 @@ class VerilogIDE(QMainWindow):
         self.ai_worker.start()
 
     def on_ai_finished(self, response):
-        self.ai_ask_btn.setEnabled(True)
+        self.ai_send_btn.setEnabled(True)
+        self.ai_stop_btn.setEnabled(False)
         cursor = self.ai_output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.select(cursor.SelectionType.BlockUnderCursor)
         cursor.removeSelectedText()
+        
+        self.ai_input.clear()
         
         # Add to chat history
         prompt = self.ai_worker.messages[-1]["content"]
@@ -573,23 +603,21 @@ class VerilogIDE(QMainWindow):
         self.ai_output.append(f"<b>AI ({self.ai_worker.model}):</b><br><pre>{html.escape(response)}</pre>")
         
         # Parse for creations/edits
-        create_matches = re.finditer(r'\[CREATE_FILE:\s*(.+?)\]\s*```(?:verilog|v)?\n(.*?)```', response, re.DOTALL)
+        create_matches = re.finditer(r'\[CREATE_FILE:\s*([^\]\s]+)\]\s*```(?:verilog|v)?\n(.*?)\n?```', response, re.DOTALL | re.IGNORECASE)
         for match in create_matches:
             filename = match.group(1).strip()
             code = match.group(2)
-            if self.current_project_dir:
-                filepath = os.path.join(self.current_project_dir, filename)
-                try:
-                    with open(filepath, 'w') as f:
-                        f.write(code)
-                    self.open_file(filepath)
-                    self.ai_output.append(f"<i style='color:green;'>Created and opened file: {filename}</i>")
-                except Exception as e:
-                    self.ai_output.append(f"<b style='color:red;'>Failed to create file {filename}: {e}</b>")
-            else:
-                self.ai_output.append("<b style='color:red;'>Cannot create file. Please open or create a project first.</b>")
+            proj_dir = self.current_project_dir or os.getcwd()
+            filepath = os.path.join(proj_dir, filename)
+            try:
+                with open(filepath, 'w') as f:
+                    f.write(code)
+                self.open_file(filepath)
+                self.ai_output.append(f"<i style='color:green;'>Created and opened file: {filename}</i>")
+            except Exception as e:
+                self.ai_output.append(f"<b style='color:red;'>Failed to create file {filename}: {e}</b>")
                 
-        edit_matches = re.finditer(r'\[EDIT_ACTIVE_FILE\]\s*```(?:verilog|v)?\n(.*?)```', response, re.DOTALL)
+        edit_matches = re.finditer(r'\[EDIT_ACTIVE_FILE\]\s*```(?:verilog|v)?\n(.*?)```', response, re.DOTALL | re.IGNORECASE)
         for match in edit_matches:
             code = match.group(1)
             target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
@@ -601,7 +629,8 @@ class VerilogIDE(QMainWindow):
                 self.ai_output.append("<b style='color:red;'>No active file to edit.</b>")
 
     def on_ai_error(self, error):
-        self.ai_ask_btn.setEnabled(True)
+        self.ai_send_btn.setEnabled(True)
+        self.ai_stop_btn.setEnabled(False)
         cursor = self.ai_output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.select(cursor.SelectionType.BlockUnderCursor)
@@ -845,8 +874,16 @@ class VerilogIDE(QMainWindow):
             self.console_output.appendPlainText("No Verilog (.v) files found in the current directory.")
             return
             
+        iverilog_path = shutil.which("iverilog")
+        if not iverilog_path:
+            fallback = "C:\\iverilog\\bin\\iverilog.exe"
+            if os.path.exists(fallback):
+                iverilog_path = fallback
+            else:
+                iverilog_path = "iverilog" # Let it fail with FileNotFoundError
+
         sim_vvp = os.path.join(proj_dir, "sim.vvp")
-        cmd_compile = ["iverilog", "-o", "sim.vvp"] + v_files
+        cmd_compile = [iverilog_path, "-o", "sim.vvp"] + v_files
         self.console_output.appendPlainText(f"> {' '.join(cmd_compile)}")
         
         try:
@@ -860,7 +897,15 @@ class VerilogIDE(QMainWindow):
                 
             self.console_output.appendPlainText("Compilation successful. Running simulation...")
             
-            cmd_sim = ["vvp", "sim.vvp"]
+            vvp_path = shutil.which("vvp")
+            if not vvp_path:
+                fallback_vvp = "C:\\iverilog\\bin\\vvp.exe"
+                if os.path.exists(fallback_vvp):
+                    vvp_path = fallback_vvp
+                else:
+                    vvp_path = "vvp"
+
+            cmd_sim = [vvp_path, "sim.vvp"]
             self.console_output.appendPlainText(f"> {' '.join(cmd_sim)}")
             res_sim = subprocess.run(cmd_sim, cwd=proj_dir, capture_output=True, text=True)
             if res_sim.stdout: self.console_output.appendPlainText(res_sim.stdout.strip())
@@ -877,6 +922,8 @@ class VerilogIDE(QMainWindow):
             else:
                 self.console_output.appendPlainText("No .vcd file found. Did you add $dumpfile and $dumpvars to your testbench?")
                 
+        except FileNotFoundError as e:
+            self.console_output.appendPlainText("Error: 'iverilog' or 'vvp' was not found on your system.\nPlease make sure Icarus Verilog is installed and added to your system's PATH variable.")
         except Exception as e:
             self.console_output.appendPlainText(f"Error during simulation: {e}")
 
