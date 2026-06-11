@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 import html
 from PyQt6.QtGui import QAction, QKeySequence, QFont, QIcon, QColor, QPainter, QPen, QFileSystemModel, QTextFormat
-from PyQt6.QtCore import Qt, QDir, QSize, QRect, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QDir, QSize, QRect, QThread, pyqtSignal, QProcess, QByteArray
 
 OLLAMA_CLOUD_API_KEY = "949a3f58fcfb475ebd95be644b8aa7b1.Wex8pxkLXUrUGqQKBPWDSEyD"
 OLLAMA_CLOUD_BASE_URL = "https://ollama.com"
@@ -248,6 +248,239 @@ class VersionHistoryDialog(QDialog):
 from waveform_viewer import WaveformViewer
 from vio_dashboard import VIODashboard
 
+
+class TerminalWidget(QWidget):
+    """A VS Code-style integrated terminal powered by QProcess."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._history: list[str] = []
+        self._hist_idx: int = -1
+        self._process: QProcess | None = None
+        self._cwd: str = os.getcwd()
+        self._setup_ui()
+        self._start_shell()
+
+    # ── UI ──────────────────────────────────────────────────────────
+    def _setup_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Top toolbar ─────────────────────────────────────────────
+        bar = QHBoxLayout()
+        bar.setContentsMargins(6, 4, 6, 4)
+
+        self._shell_label = QLabel()
+        self._shell_label.setStyleSheet("color:#9CDCFE; font-weight:bold; font-family:Consolas;")
+
+        self._cwd_label = QLabel()
+        self._cwd_label.setStyleSheet("color:#888; font-family:Consolas; font-size:10px;")
+        self._cwd_label.setWordWrap(False)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFixedWidth(60)
+        clear_btn.setStyleSheet(
+            "QPushButton{background:#3a3a3a;color:#ccc;border:1px solid #555;"
+            "border-radius:3px;padding:2px 6px;}"
+            "QPushButton:hover{background:#505050;}"
+        )
+        clear_btn.clicked.connect(self._clear_output)
+
+        new_btn = QPushButton("+ New")
+        new_btn.setFixedWidth(60)
+        new_btn.setStyleSheet(
+            "QPushButton{background:#3a3a3a;color:#ccc;border:1px solid #555;"
+            "border-radius:3px;padding:2px 6px;}"
+            "QPushButton:hover{background:#505050;}"
+        )
+        new_btn.clicked.connect(self._restart_shell)
+
+        bar.addWidget(self._shell_label)
+        bar.addSpacing(10)
+        bar.addWidget(self._cwd_label)
+        bar.addStretch()
+        bar.addWidget(clear_btn)
+        bar.addWidget(new_btn)
+
+        bar_widget = QWidget()
+        bar_widget.setLayout(bar)
+        bar_widget.setStyleSheet("background:#252526; border-bottom:1px solid #333;")
+        root.addWidget(bar_widget)
+
+        # ── Output display ──────────────────────────────────────────
+        self._output = QPlainTextEdit()
+        self._output.setReadOnly(True)
+        self._output.setFont(QFont("Consolas", 11))
+        self._output.setStyleSheet(
+            "QPlainTextEdit{"
+            "  background:#1e1e1e; color:#d4d4d4;"
+            "  border:none;"
+            "}"
+        )
+        self._output.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        root.addWidget(self._output, stretch=1)
+
+        # ── Input row ───────────────────────────────────────────────
+        input_row = QHBoxLayout()
+        input_row.setContentsMargins(4, 2, 4, 4)
+        input_row.setSpacing(4)
+
+        self._prompt_label = QLabel("❯")
+        self._prompt_label.setStyleSheet(
+            "color:#4EC9B0; font-family:Consolas; font-size:13px; font-weight:bold;"
+        )
+        input_row.addWidget(self._prompt_label)
+
+        self._input = QLineEdit()
+        self._input.setFont(QFont("Consolas", 11))
+        self._input.setStyleSheet(
+            "QLineEdit{"
+            "  background:#252526; color:#d4d4d4;"
+            "  border:1px solid #3a3a3a; border-radius:3px; padding:3px 6px;"
+            "}"
+            "QLineEdit:focus{border:1px solid #4EC9B0;}"
+        )
+        self._input.setPlaceholderText("Type a command and press Enter...")
+        self._input.returnPressed.connect(self._send_command)
+        self._input.installEventFilter(self)
+        input_row.addWidget(self._input)
+
+        input_widget = QWidget()
+        input_widget.setLayout(input_row)
+        input_widget.setStyleSheet("background:#1e1e1e;")
+        root.addWidget(input_widget)
+
+    # ── Shell management ────────────────────────────────────────────
+    def _shell_executable(self) -> str:
+        ps = shutil.which("powershell.exe") or shutil.which("powershell")
+        if ps:
+            return ps
+        return "cmd.exe"
+
+    def _shell_args(self, exe: str) -> list[str]:
+        if "powershell" in exe.lower():
+            # -NoLogo: suppress banner  -NoExit: stay alive  -Command: set cwd first
+            return ["-NoLogo", "-NoExit",
+                    "-Command", f"Set-Location -LiteralPath '{self._cwd}'"]
+        return []  # cmd.exe needs no extra args
+
+    def _start_shell(self):
+        exe = self._shell_executable()
+        shell_name = "PowerShell" if "powershell" in exe.lower() else "cmd"
+        self._shell_label.setText(f"⚡ {shell_name}")
+        self._cwd_label.setText(self._cwd)
+
+        self._process = QProcess(self)
+        self._process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self._process.readyReadStandardOutput.connect(self._on_output)
+        self._process.finished.connect(self._on_finished)
+        self._process.setWorkingDirectory(self._cwd)
+        self._process.start(exe, self._shell_args(exe))
+
+        if not self._process.waitForStarted(3000):
+            self._append_text("[Terminal] Failed to start shell process.\n", error=True)
+
+    def _restart_shell(self):
+        if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
+            self._process.kill()
+            self._process.waitForFinished(500)
+        self._output.clear()
+        self._start_shell()
+
+    # ── Commands ────────────────────────────────────────────────────
+    def _send_command(self):
+        cmd = self._input.text()
+        if not cmd.strip():
+            return
+
+        # Echo the command in output like a real terminal
+        self._append_text(f"❯ {cmd}\n", prompt=True)
+
+        # Store history
+        if not self._history or self._history[-1] != cmd:
+            self._history.append(cmd)
+        self._hist_idx = -1
+        self._input.clear()
+
+        if self._process and self._process.state() == QProcess.ProcessState.Running:
+            self._process.write((cmd + "\n").encode("utf-8", errors="replace"))
+        else:
+            self._append_text("[Terminal] Shell is not running. Click '+ New' to restart.\n", error=True)
+
+    def _clear_output(self):
+        self._output.clear()
+
+    # ── CWD control (called by IDE when project opens) ───────────────
+    def set_cwd(self, path: str):
+        self._cwd = path
+        self._cwd_label.setText(path)
+        if self._process and self._process.state() == QProcess.ProcessState.Running:
+            exe = self._shell_executable()
+            if "powershell" in exe.lower():
+                cd_cmd = f"Set-Location -LiteralPath '{path}'"
+            else:
+                cd_cmd = f'cd /d "{path}"'
+            self._process.write((cd_cmd + "\n").encode("utf-8", errors="replace"))
+
+    # ── Output handling ─────────────────────────────────────────────
+    def _on_output(self):
+        raw: QByteArray = self._process.readAllStandardOutput()
+        try:
+            text = raw.data().decode("utf-8", errors="replace")
+        except Exception:
+            text = str(raw.data())
+        # Strip basic ANSI escape codes
+        text = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', text)
+        self._append_text(text)
+
+    def _on_finished(self, exit_code, exit_status):
+        self._append_text(f"\n[Terminal] Process exited (code {exit_code}). Click '+ New' to restart.\n",
+                          error=True)
+        self._prompt_label.setStyleSheet("color:#F44747; font-family:Consolas; font-size:13px; font-weight:bold;")
+
+    def _append_text(self, text: str, error: bool = False, prompt: bool = False):
+        cursor = self._output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+
+        fmt = self._output.currentCharFormat()
+        if prompt:
+            fmt.setForeground(QColor("#4EC9B0"))
+        elif error:
+            fmt.setForeground(QColor("#F44747"))
+        else:
+            fmt.setForeground(QColor("#d4d4d4"))
+
+        cursor.setCharFormat(fmt)
+        cursor.insertText(text)
+        self._output.setTextCursor(cursor)
+        self._output.ensureCursorVisible()
+
+    # ── Arrow-key history navigation ────────────────────────────────
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        from PyQt6.QtGui import QKeyEvent
+        if obj is self._input and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Up:
+                if self._history:
+                    if self._hist_idx == -1:
+                        self._hist_idx = len(self._history) - 1
+                    elif self._hist_idx > 0:
+                        self._hist_idx -= 1
+                    self._input.setText(self._history[self._hist_idx])
+                return True
+            elif key == Qt.Key.Key_Down:
+                if self._hist_idx != -1:
+                    self._hist_idx += 1
+                    if self._hist_idx >= len(self._history):
+                        self._hist_idx = -1
+                        self._input.clear()
+                    else:
+                        self._input.setText(self._history[self._hist_idx])
+                return True
+        return super().eventFilter(obj, event)
+
 class VerilogIDE(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -454,6 +687,13 @@ class VerilogIDE(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.console_dock)
         
         self.tabifyDockWidget(self.ila_dock, self.console_dock)
+
+        # Dock: Integrated Terminal
+        self.terminal_dock = QDockWidget("Terminal", self)
+        self.terminal_widget = TerminalWidget()
+        self.terminal_dock.setWidget(self.terminal_widget)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
+        self.tabifyDockWidget(self.console_dock, self.terminal_dock)
         
         # Dock: AI Assistant
         self.ai_dock = QDockWidget("AI Coding Assistant", self)
@@ -537,6 +777,7 @@ class VerilogIDE(QMainWindow):
         self.windows_menu.addAction(self.ila_dock.toggleViewAction())
         self.windows_menu.addAction(self.console_dock.toggleViewAction())
         self.windows_menu.addAction(self.ai_dock.toggleViewAction())
+        self.windows_menu.addAction(self.terminal_dock.toggleViewAction())
 
         self.new_file() # Start with an empty file
         
@@ -712,6 +953,8 @@ class VerilogIDE(QMainWindow):
         self.console_output.appendPlainText(f"Opened project: {dir_path}")
         self.save_config("last_project", dir_path)
         self.load_ai_memory()
+        if hasattr(self, 'terminal_widget'):
+            self.terminal_widget.set_cwd(dir_path)
         
     def load_ai_memory(self):
         self.chat_history = []
