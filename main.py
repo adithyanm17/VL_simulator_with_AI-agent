@@ -246,6 +246,7 @@ class VersionHistoryDialog(QDialog):
                 QMessageBox.warning(self, "Error", f"Failed to revert: {e}")
 
 from waveform_viewer import WaveformViewer
+from vio_dashboard import VIODashboard
 
 class VerilogIDE(QMainWindow):
     def __init__(self):
@@ -429,18 +430,12 @@ class VerilogIDE(QMainWindow):
         self.proj_dock.setWidget(self.tree_view)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.proj_dock)
         
-        # Dock: VIO (Virtual Input/Output)
-        self.vio_dock = QDockWidget("VIO / Logic Panel", self)
-        vio_widget = QWidget()
-        vio_layout = QVBoxLayout(vio_widget)
-        
-        info_label = QLabel("VIO Dashboard\n\nNo interactive testbench active.\n(Use examples or attach a testbench)")
-        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        vio_layout.addWidget(info_label)
-        
-        vio_layout.addStretch()
-        
-        self.vio_dock.setWidget(vio_widget)
+        # Dock: VIO / Logic Gate Diagram
+        self.vio_dock = QDockWidget("Logic Gate Diagram", self)
+        self.vio_dock.setMinimumWidth(420)
+        self.vio_dashboard = VIODashboard()
+        self.vio_dashboard.parse_btn.clicked.connect(self.vio_parse_module)
+        self.vio_dock.setWidget(self.vio_dashboard)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.vio_dock)
         
         # Dock: ILA / Waveform
@@ -532,8 +527,8 @@ class VerilogIDE(QMainWindow):
         self.ai_dock.setWidget(ai_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
         
-        # Make AI Dock full height, tabify vio dock with console
-        self.tabifyDockWidget(self.console_dock, self.vio_dock)
+        # Tabify VIO dock under AI dock (right side)
+        self.tabifyDockWidget(self.ai_dock, self.vio_dock)
         self.ai_dock.raise_()
         
         # Add dock widgets to Windows menu
@@ -1005,6 +1000,30 @@ class VerilogIDE(QMainWindow):
             self.console_output.appendPlainText("Error: 'iverilog' or 'vvp' was not found on your system.\nPlease make sure Icarus Verilog is installed and added to your system's PATH variable.")
         except Exception as e:
             self.console_output.appendPlainText(f"Error during simulation: {e}")
+
+    # ── Gate Diagram Helper ──────────────────────────────────────────
+    def _get_active_verilog_code(self):
+        """Return (code, file_path) for the currently active editor tab."""
+        for tabs in [self.editor_tabs, self.editor_tabs_right]:
+            editor = tabs.currentWidget()
+            if editor:
+                code = editor.toPlainText().strip()
+                if code:
+                    fp = editor.property("file_path") or ""
+                    return code, fp
+        return "", ""
+
+    def vio_parse_module(self):
+        """Parse active editor and draw the logic gate diagram."""
+        code, fp = self._get_active_verilog_code()
+        if not code:
+            self.console_output.appendPlainText("Gate Viewer: No active Verilog file to parse.")
+            return
+        module_name = os.path.basename(fp).replace(".v", "") if fp else "module"
+        self.vio_dashboard.load_module(code, module_name)
+        self.vio_dock.raise_()
+        self.console_output.appendPlainText(f"Gate Viewer: Drew diagram for '{module_name}'")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
