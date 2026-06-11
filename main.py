@@ -18,33 +18,44 @@ import html
 from PyQt6.QtGui import QAction, QKeySequence, QFont, QIcon, QColor, QPainter, QPen, QFileSystemModel, QTextFormat
 from PyQt6.QtCore import Qt, QDir, QSize, QRect, QThread, pyqtSignal
 
+OLLAMA_CLOUD_API_KEY = "949a3f58fcfb475ebd95be644b8aa7b1.Wex8pxkLXUrUGqQKBPWDSEyD"
+OLLAMA_CLOUD_BASE_URL = "https://ollama.com"
+
 class OllamaWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, model, messages):
+    def __init__(self, model, messages, api_key=None):
         super().__init__()
         self.model = model
         self.messages = messages
+        self.api_key = api_key or OLLAMA_CLOUD_API_KEY
 
     def stop(self):
         self.terminate()
 
     def run(self):
-        url = "http://localhost:11434/api/chat"
+        url = f"{OLLAMA_CLOUD_BASE_URL}/api/chat"
         data = {
             "model": self.model,
             "messages": self.messages,
             "stream": False
         }
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.api_key}'
+        }
         
         try:
-            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req) as response:
+            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 self.finished.emit(result.get("message", {}).get("content", ""))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')
+            self.error.emit(f"HTTP {e.code} Error from Ollama Cloud: {body}")
         except urllib.error.URLError as e:
-            self.error.emit(f"Failed to connect to Ollama. Make sure Ollama is running locally. Error: {str(e)}")
+            self.error.emit(f"Failed to connect to Ollama Cloud: {str(e)}")
         except Exception as e:
             self.error.emit(f"An error occurred: {str(e)}")
 
@@ -455,10 +466,31 @@ class VerilogIDE(QMainWindow):
         ai_widget = QWidget()
         ai_layout = QVBoxLayout(ai_widget)
         
+        # API Key row
+        api_key_layout = QHBoxLayout()
+        api_key_layout.addWidget(QLabel("API Key:"))
+        self.ai_api_key_input = QLineEdit()
+        self.ai_api_key_input.setText(OLLAMA_CLOUD_API_KEY)
+        self.ai_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ai_api_key_input.setPlaceholderText("Enter Ollama Cloud API Key...")
+        self.ai_api_key_input.setToolTip("Your Ollama Cloud API key (from ollama.com account settings)")
+        api_key_layout.addWidget(self.ai_api_key_input)
+        
+        show_key_btn = QPushButton("👁")
+        show_key_btn.setFixedWidth(32)
+        show_key_btn.setCheckable(True)
+        show_key_btn.setToolTip("Show/Hide API Key")
+        show_key_btn.toggled.connect(lambda checked: self.ai_api_key_input.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        ))
+        api_key_layout.addWidget(show_key_btn)
+        ai_layout.addLayout(api_key_layout)
+
+        # Model row
         model_layout = QHBoxLayout()
         model_layout.addWidget(QLabel("Model:"))
         self.ai_model_combo = QComboBox()
-        self.ai_model_combo.addItems(["llama3.2:1b", "llama3", "qwen3.5:4b", "deepseek-coder"])
+        self.ai_model_combo.addItems(["llama3.2", "llama3", "llama3.1", "gemma3:4b", "qwen2.5-coder:7b", "deepseek-coder-v2", "mistral", "codellama"])
         model_layout.addWidget(self.ai_model_combo)
         
         self.ai_refresh_btn = QPushButton("Refresh Models")
@@ -517,9 +549,15 @@ class VerilogIDE(QMainWindow):
         self.refresh_ollama_models()
 
     def refresh_ollama_models(self):
+        api_key = self.ai_api_key_input.text().strip() if hasattr(self, 'ai_api_key_input') else OLLAMA_CLOUD_API_KEY
+        if not api_key:
+            return
         try:
-            req = urllib.request.Request("http://localhost:11434/api/tags")
-            with urllib.request.urlopen(req, timeout=2) as response:
+            headers = {
+                'Authorization': f'Bearer {api_key}'
+            }
+            req = urllib.request.Request(f"{OLLAMA_CLOUD_BASE_URL}/api/tags", headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 models = [m["name"] for m in result.get("models", [])]
                 if models:
@@ -528,10 +566,8 @@ class VerilogIDE(QMainWindow):
                     self.ai_model_combo.addItems(models)
                     if current in models:
                         self.ai_model_combo.setCurrentText(current)
-                    elif "llama3.2:1b" in models:
-                        self.ai_model_combo.setCurrentText("llama3.2:1b")
         except Exception:
-            pass # Fail silently if ollama isn't running yet
+            pass  # Fail silently – keep the default list
 
     def stop_ai(self):
         if hasattr(self, 'ai_worker') and self.ai_worker.isRunning():
@@ -548,12 +584,17 @@ class VerilogIDE(QMainWindow):
         prompt = self.ai_input.toPlainText().strip()
         if not prompt: return
         
-        model = self.ai_model_combo.currentText() or "llama3.2:1b"
+        model = self.ai_model_combo.currentText() or "llama3.2"
+        api_key = self.ai_api_key_input.text().strip() or OLLAMA_CLOUD_API_KEY
+
+        if not api_key:
+            self.ai_output.append("<b style='color:red;'>Error:</b> No API key provided. Please enter your Ollama Cloud API key.")
+            return
             
         self.ai_send_btn.setEnabled(False)
         self.ai_stop_btn.setEnabled(True)
         self.ai_output.append(f"<br><b>You:</b> {html.escape(prompt)}")
-        self.ai_output.append("<i>Generating...</i>")
+        self.ai_output.append("<i>Generating... (Ollama Cloud)</i>")
         
         context = ""
         active_file_name = "Untitled"
@@ -579,7 +620,7 @@ class VerilogIDE(QMainWindow):
             
         messages = [{"role": "system", "content": system_prompt}] + self.chat_history + [{"role": "user", "content": prompt}]
             
-        self.ai_worker = OllamaWorker(model, messages)
+        self.ai_worker = OllamaWorker(model, messages, api_key=api_key)
         self.ai_worker.finished.connect(self.on_ai_finished)
         self.ai_worker.error.connect(self.on_ai_error)
         self.ai_worker.start()
