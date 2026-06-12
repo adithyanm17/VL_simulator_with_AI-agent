@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (
     QTabWidget, QPlainTextEdit, QFileDialog, QDockWidget, QListWidget,
     QTreeView, QMenu, QMenuBar, QToolBar, QTextEdit,
     QPushButton, QLabel, QSplitter, QComboBox, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QGroupBox, QDialog, QFormLayout, QDialogButtonBox, QLineEdit, QInputDialog
+    QTableWidgetItem, QHeaderView, QMessageBox, QGroupBox, QDialog, QFormLayout,
+    QDialogButtonBox, QLineEdit, QInputDialog, QScrollArea, QFrame, QSizePolicy
 )
 import html
 from PyQt6.QtGui import QAction, QKeySequence, QFont, QIcon, QColor, QPainter, QPen, QFileSystemModel, QTextFormat
@@ -25,27 +26,30 @@ class OllamaWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, model, messages, api_key=None):
+    def __init__(self, model, messages, api_key=None, base_url=None, max_tokens=4096):
         super().__init__()
         self.model = model
         self.messages = messages
         self.api_key = api_key or OLLAMA_CLOUD_API_KEY
+        self.base_url = (base_url or OLLAMA_CLOUD_BASE_URL).rstrip('/')
+        self.max_tokens = max_tokens
 
     def stop(self):
         self.terminate()
 
     def run(self):
-        url = f"{OLLAMA_CLOUD_BASE_URL}/api/chat"
+        url = f"{self.base_url}/api/chat"
         data = {
             "model": self.model,
             "messages": self.messages,
-            "stream": False
+            "stream": False,
+            "options": {"num_predict": self.max_tokens}
         }
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self.api_key}'
         }
-        
+
         try:
             req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers)
             with urllib.request.urlopen(req, timeout=120) as response:
@@ -53,9 +57,9 @@ class OllamaWorker(QThread):
                 self.finished.emit(result.get("message", {}).get("content", ""))
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')
-            self.error.emit(f"HTTP {e.code} Error from Ollama Cloud: {body}")
+            self.error.emit(f"HTTP {e.code} Error: {body}")
         except urllib.error.URLError as e:
-            self.error.emit(f"Failed to connect to Ollama Cloud: {str(e)}")
+            self.error.emit(f"Connection failed: {str(e)}")
         except Exception as e:
             self.error.emit(f"An error occurred: {str(e)}")
 
@@ -481,6 +485,284 @@ class TerminalWidget(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
+
+# ── Provider URL presets ─────────────────────────────────────────────────────
+PROVIDER_URLS = {
+    "Ollama":         "https://ollama.com",
+    "Google Gemini":  "https://generativelanguage.googleapis.com/v1beta",
+    "OpenAI":         "https://api.openai.com/v1",
+    "Anthropic":      "https://api.anthropic.com/v1",
+    "Custom":         "",
+}
+
+API_KEYS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_keys.json")
+
+
+class APIKeyManagerDialog(QDialog):
+    """Manage named API key profiles. Keys are stored in api_keys.json."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("API Key Manager")
+        self.resize(780, 460)
+        self.setMinimumSize(640, 380)
+        self._profiles = []        # list of dicts
+        self._current_row = -1
+        self._load_profiles()
+        self._build_ui()
+        self._refresh_list()
+        if self._profiles:
+            self._list.setCurrentRow(0)
+
+    # ── Data I/O ──────────────────────────────────────────────────────────────
+    def _load_profiles(self):
+        if os.path.exists(API_KEYS_FILE):
+            try:
+                with open(API_KEYS_FILE, "r") as f:
+                    data = json.load(f)
+                self._profiles = data.get("keys", [])
+            except Exception:
+                self._profiles = []
+        if not self._profiles:
+            # seed with the built-in default
+            self._profiles = [{
+                "name": "Ollama Cloud (default)",
+                "provider": "Ollama",
+                "base_url": OLLAMA_CLOUD_BASE_URL,
+                "key": OLLAMA_CLOUD_API_KEY,
+                "model": "llama3.2",
+            }]
+
+    def _save_profiles(self):
+        try:
+            existing = {}
+            if os.path.exists(API_KEYS_FILE):
+                with open(API_KEYS_FILE, "r") as f:
+                    existing = json.load(f)
+            existing["keys"] = self._profiles
+            with open(API_KEYS_FILE, "w") as f:
+                json.dump(existing, f, indent=2)
+        except Exception as e:
+            QMessageBox.warning(self, "Save Error", f"Could not save keys: {e}")
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+    def _build_ui(self):
+        root = QHBoxLayout(self)
+        root.setSpacing(0)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        # ── Left panel: list ──────────────────────────────────────────────────
+        left = QWidget()
+        left.setFixedWidth(220)
+        left.setStyleSheet("background:#1e1e1e;")
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(8, 8, 8, 8)
+        left_lay.setSpacing(6)
+
+        lbl = QLabel("Saved Keys")
+        lbl.setStyleSheet("color:#9CDCFE; font-weight:bold; font-size:12px;")
+        left_lay.addWidget(lbl)
+
+        self._list = QListWidget()
+        self._list.setStyleSheet(
+            "QListWidget{background:#252526; color:#d4d4d4; border:1px solid #3a3a3a; border-radius:4px;}"
+            "QListWidget::item{padding:6px 8px;}"
+            "QListWidget::item:selected{background:#094771; color:#ffffff;}"
+        )
+        self._list.currentRowChanged.connect(self._on_select)
+        left_lay.addWidget(self._list)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("＋ New")
+        add_btn.setStyleSheet(self._btn_style("#0e639c"))
+        add_btn.clicked.connect(self._add_new)
+        self._del_btn = QPushButton("🗑 Delete")
+        self._del_btn.setStyleSheet(self._btn_style("#6e1c1c"))
+        self._del_btn.clicked.connect(self._delete_current)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(self._del_btn)
+        left_lay.addLayout(btn_row)
+        root.addWidget(left)
+
+        # ── Divider ───────────────────────────────────────────────────────────
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.VLine)
+        div.setStyleSheet("color:#3a3a3a;")
+        root.addWidget(div)
+
+        # ── Right panel: form ─────────────────────────────────────────────────
+        right = QWidget()
+        right.setStyleSheet("background:#252526;")
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(16, 16, 16, 16)
+        right_lay.setSpacing(10)
+
+        form_lbl = QLabel("Key Profile")
+        form_lbl.setStyleSheet("color:#9CDCFE; font-weight:bold; font-size:13px;")
+        right_lay.addWidget(form_lbl)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setSpacing(8)
+
+        label_style = "color:#cccccc; font-size:11px;"
+
+        # Name
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("e.g. Gemini Pro")
+        self._style_input(self._name_edit)
+        name_lbl = QLabel("Name:")
+        name_lbl.setStyleSheet(label_style)
+        form.addRow(name_lbl, self._name_edit)
+
+        # Provider
+        self._provider_combo = QComboBox()
+        self._provider_combo.addItems(list(PROVIDER_URLS.keys()))
+        self._provider_combo.setStyleSheet(
+            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:3px;padding:4px;}"
+            "QComboBox::drop-down{border:none;} QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
+        )
+        self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        prov_lbl = QLabel("Provider:")
+        prov_lbl.setStyleSheet(label_style)
+        form.addRow(prov_lbl, self._provider_combo)
+
+        # Base URL
+        self._url_edit = QLineEdit()
+        self._url_edit.setPlaceholderText("https://...")
+        self._style_input(self._url_edit)
+        url_lbl = QLabel("Base URL:")
+        url_lbl.setStyleSheet(label_style)
+        form.addRow(url_lbl, self._url_edit)
+
+        # API Key
+        key_row = QHBoxLayout()
+        self._key_edit = QLineEdit()
+        self._key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._key_edit.setPlaceholderText("Paste API key here...")
+        self._style_input(self._key_edit)
+        show_btn = QPushButton("👁")
+        show_btn.setFixedWidth(34)
+        show_btn.setCheckable(True)
+        show_btn.setStyleSheet("QPushButton{background:#3c3c3c;color:#ccc;border:1px solid #555;border-radius:3px;}"
+                               "QPushButton:checked{background:#094771;}")
+        show_btn.toggled.connect(lambda c: self._key_edit.setEchoMode(
+            QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password))
+        key_row.addWidget(self._key_edit)
+        key_row.addWidget(show_btn)
+        key_lbl = QLabel("API Key:")
+        key_lbl.setStyleSheet(label_style)
+        form.addRow(key_lbl, key_row)
+
+        # Default Model
+        self._model_edit = QLineEdit()
+        self._model_edit.setPlaceholderText("e.g. llama3.2 / gemini-1.5-pro")
+        self._style_input(self._model_edit)
+        mod_lbl = QLabel("Default Model:")
+        mod_lbl.setStyleSheet(label_style)
+        form.addRow(mod_lbl, self._model_edit)
+
+        right_lay.addLayout(form)
+        right_lay.addStretch()
+
+        # Save button
+        save_btn = QPushButton("💾  Save Profile")
+        save_btn.setStyleSheet(self._btn_style("#0e639c", pad="8px 20px"))
+        save_btn.clicked.connect(self._save_current)
+        right_lay.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # Close
+        close_btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_btn.rejected.connect(self.reject)
+        right_lay.addWidget(close_btn)
+
+        root.addWidget(right)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def _btn_style(bg, pad="4px 10px"):
+        return (f"QPushButton{{background:{bg};color:#fff;border:none;border-radius:4px;"
+                f"padding:{pad};font-size:11px;}}"
+                f"QPushButton:hover{{background:{bg}cc;}}")
+
+    @staticmethod
+    def _style_input(w):
+        w.setStyleSheet(
+            "QLineEdit{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
+            "border-radius:3px;padding:5px 8px;font-family:Consolas;}"
+            "QLineEdit:focus{border:1px solid #4EC9B0;}"
+        )
+
+    def _refresh_list(self):
+        self._list.clear()
+        for p in self._profiles:
+            self._list.addItem(f"🔑  {p.get('name', 'Unnamed')}")
+
+    def _on_select(self, row):
+        self._current_row = row
+        if 0 <= row < len(self._profiles):
+            p = self._profiles[row]
+            self._name_edit.setText(p.get("name", ""))
+            # Set provider combo
+            prov = p.get("provider", "Ollama")
+            idx = self._provider_combo.findText(prov)
+            self._provider_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._url_edit.setText(p.get("base_url", ""))
+            self._key_edit.setText(p.get("key", ""))
+            self._model_edit.setText(p.get("model", ""))
+
+    def _on_provider_changed(self, prov):
+        preset = PROVIDER_URLS.get(prov, "")
+        if preset:                 # only auto-fill for non-Custom
+            self._url_edit.setText(preset)
+            self._url_edit.setReadOnly(prov != "Custom")
+        else:
+            self._url_edit.setReadOnly(False)
+
+    def _add_new(self):
+        new_profile = {
+            "name": "New Key",
+            "provider": "Ollama",
+            "base_url": OLLAMA_CLOUD_BASE_URL,
+            "key": "",
+            "model": "",
+        }
+        self._profiles.append(new_profile)
+        self._refresh_list()
+        self._list.setCurrentRow(len(self._profiles) - 1)
+
+    def _save_current(self):
+        row = self._list.currentRow()
+        if row < 0:
+            return
+        name = self._name_edit.text().strip() or "Unnamed"
+        self._profiles[row] = {
+            "name": name,
+            "provider": self._provider_combo.currentText(),
+            "base_url": self._url_edit.text().strip(),
+            "key": self._key_edit.text(),
+            "model": self._model_edit.text().strip(),
+        }
+        self._save_profiles()
+        self._refresh_list()
+        self._list.setCurrentRow(row)
+        QMessageBox.information(self, "Saved", f"Profile '{name}' saved.")
+
+    def _delete_current(self):
+        row = self._list.currentRow()
+        if row < 0:
+            return
+        name = self._profiles[row].get("name", "?")
+        reply = QMessageBox.question(self, "Delete", f"Delete profile '{name}'?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._profiles.pop(row)
+            self._save_profiles()
+            self._refresh_list()
+            if self._profiles:
+                self._list.setCurrentRow(min(row, len(self._profiles) - 1))
+
+
 class VerilogIDE(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -565,11 +847,17 @@ class VerilogIDE(QMainWindow):
         undo_act.setShortcut(QKeySequence.StandardKey.Undo)
         undo_act.triggered.connect(self.undo_edit)
         edit_menu.addAction(undo_act)
-        
+
         redo_act = QAction("Redo", self)
         redo_act.setShortcut(QKeySequence.StandardKey.Redo)
         redo_act.triggered.connect(self.redo_edit)
         edit_menu.addAction(redo_act)
+
+        edit_menu.addSeparator()
+        manage_keys_act = QAction("🔑  Manage API Keys…", self)
+        manage_keys_act.setShortcut("Ctrl+Shift+K")
+        manage_keys_act.triggered.connect(self.show_api_key_manager)
+        edit_menu.addAction(manage_keys_act)
         
         # View Actions (Themes)
         # View Actions
@@ -695,77 +983,175 @@ class VerilogIDE(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
         self.tabifyDockWidget(self.console_dock, self.terminal_dock)
         
-        # Dock: AI Assistant
+        # Dock: AI Coding Assistant (redesigned)
         self.ai_dock = QDockWidget("AI Coding Assistant", self)
-        self.ai_dock.setMinimumWidth(450)
+        self.ai_dock.setMinimumWidth(420)
         ai_widget = QWidget()
+        ai_widget.setStyleSheet("background:#1e1e1e;")
         ai_layout = QVBoxLayout(ai_widget)
-        
-        # API Key row
-        api_key_layout = QHBoxLayout()
-        api_key_layout.addWidget(QLabel("API Key:"))
-        self.ai_api_key_input = QLineEdit()
-        self.ai_api_key_input.setText(OLLAMA_CLOUD_API_KEY)
-        self.ai_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.ai_api_key_input.setPlaceholderText("Enter Ollama Cloud API Key...")
-        self.ai_api_key_input.setToolTip("Your Ollama Cloud API key (from ollama.com account settings)")
-        api_key_layout.addWidget(self.ai_api_key_input)
-        
-        show_key_btn = QPushButton("👁")
-        show_key_btn.setFixedWidth(32)
-        show_key_btn.setCheckable(True)
-        show_key_btn.setToolTip("Show/Hide API Key")
-        show_key_btn.toggled.connect(lambda checked: self.ai_api_key_input.setEchoMode(
-            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
-        ))
-        api_key_layout.addWidget(show_key_btn)
-        ai_layout.addLayout(api_key_layout)
+        ai_layout.setContentsMargins(0, 0, 0, 0)
+        ai_layout.setSpacing(0)
 
-        # Model row
-        model_layout = QHBoxLayout()
-        model_layout.addWidget(QLabel("Model:"))
+        # ── Header bar ────────────────────────────────────────────────────────
+        header = QWidget()
+        header.setStyleSheet("background:#252526; border-bottom:1px solid #3a3a3a;")
+        header_lay = QVBoxLayout(header)
+        header_lay.setContentsMargins(8, 6, 8, 6)
+        header_lay.setSpacing(4)
+
+        # Row 1: Key selector + Model + Refresh
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+
+        key_icon = QLabel("🔑")
+        row1.addWidget(key_icon)
+
+        self.ai_key_combo = QComboBox()
+        self.ai_key_combo.setToolTip("Select saved API key profile (keys are never shown here)")
+        self.ai_key_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.ai_key_combo.setStyleSheet(
+            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
+            "border-radius:3px;padding:3px 6px;font-size:11px;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
+        )
+        row1.addWidget(self.ai_key_combo)
+
+        manage_btn = QPushButton("⚙")
+        manage_btn.setFixedWidth(28)
+        manage_btn.setToolTip("Manage API Keys (Edit → Manage API Keys)")
+        manage_btn.setStyleSheet(
+            "QPushButton{background:#3c3c3c;color:#9CDCFE;border:1px solid #555;"
+            "border-radius:3px;font-size:13px;padding:2px;}"
+            "QPushButton:hover{background:#505050;}"
+        )
+        manage_btn.clicked.connect(self.show_api_key_manager)
+        row1.addWidget(manage_btn)
+
+        row1.addWidget(QLabel("Model:"))
         self.ai_model_combo = QComboBox()
-        self.ai_model_combo.addItems(["llama3.2", "llama3", "llama3.1", "gemma3:4b", "qwen2.5-coder:7b", "deepseek-coder-v2", "mistral", "codellama"])
-        model_layout.addWidget(self.ai_model_combo)
-        
-        self.ai_refresh_btn = QPushButton("Refresh Models")
+        self.ai_model_combo.addItems(["llama3.2", "llama3", "llama3.1", "gemma3:4b",
+                                      "qwen2.5-coder:7b", "deepseek-coder-v2", "mistral", "codellama"])
+        self.ai_model_combo.setStyleSheet(
+            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
+            "border-radius:3px;padding:3px 6px;font-size:11px;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
+        )
+        row1.addWidget(self.ai_model_combo)
+
+        self.ai_refresh_btn = QPushButton("↻")
+        self.ai_refresh_btn.setFixedWidth(28)
+        self.ai_refresh_btn.setToolTip("Refresh available models")
+        self.ai_refresh_btn.setStyleSheet(
+            "QPushButton{background:#3c3c3c;color:#4EC9B0;border:1px solid #555;"
+            "border-radius:3px;font-size:14px;padding:2px;}"
+            "QPushButton:hover{background:#505050;}"
+        )
         self.ai_refresh_btn.clicked.connect(self.refresh_ollama_models)
-        model_layout.addWidget(self.ai_refresh_btn)
-        ai_layout.addLayout(model_layout)
-        
-        font_ai = QFont("Consolas", 10)
-        self.ai_output = QTextEdit()
-        self.ai_output.setReadOnly(True)
-        self.ai_output.setFont(font_ai)
-        ai_layout.addWidget(self.ai_output)
-        
-        input_layout = QHBoxLayout()
+        row1.addWidget(self.ai_refresh_btn)
+        header_lay.addLayout(row1)
+
+        # Row 2: Context window
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        ctx_lbl = QLabel("Context window:")
+        ctx_lbl.setStyleSheet("color:#888; font-size:10px;")
+        row2.addWidget(ctx_lbl)
+        self.ai_ctx_combo = QComboBox()
+        self.ai_ctx_combo.addItems(["1024", "2048", "4096", "8192", "16384", "32768"])
+        self.ai_ctx_combo.setCurrentText("4096")
+        self.ai_ctx_combo.setFixedWidth(90)
+        self.ai_ctx_combo.setStyleSheet(
+            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
+            "border-radius:3px;padding:2px 6px;font-size:10px;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
+        )
+        row2.addWidget(self.ai_ctx_combo)
+        ctx_lbl2 = QLabel("tokens")
+        ctx_lbl2.setStyleSheet("color:#888; font-size:10px;")
+        row2.addWidget(ctx_lbl2)
+        row2.addStretch()
+        header_lay.addLayout(row2)
+        ai_layout.addWidget(header)
+
+        # ── Chat scroll area ──────────────────────────────────────────────────
+        self.ai_scroll = QScrollArea()
+        self.ai_scroll.setWidgetResizable(True)
+        self.ai_scroll.setStyleSheet(
+            "QScrollArea{border:none; background:#1e1e1e;}"
+            "QScrollBar:vertical{background:#252526;width:8px;border-radius:4px;}"
+            "QScrollBar::handle:vertical{background:#555;border-radius:4px;min-height:20px;}"
+        )
+        self.ai_chat_container = QWidget()
+        self.ai_chat_container.setStyleSheet("background:#1e1e1e;")
+        self.ai_chat_layout = QVBoxLayout(self.ai_chat_container)
+        self.ai_chat_layout.setContentsMargins(8, 8, 8, 8)
+        self.ai_chat_layout.setSpacing(10)
+        self.ai_chat_layout.addStretch()   # pushes messages to bottom
+        self.ai_scroll.setWidget(self.ai_chat_container)
+        ai_layout.addWidget(self.ai_scroll, stretch=1)
+
+        # Keep a QTextEdit alias for backward compat with stop_ai/on_ai_error
+        self.ai_output = QTextEdit()   # hidden, kept for compat
+        self.ai_output.setVisible(False)
+
+        # ── Input bar ─────────────────────────────────────────────────────────
+        input_bar = QWidget()
+        input_bar.setStyleSheet("background:#252526; border-top:1px solid #3a3a3a;")
+        input_bar_lay = QHBoxLayout(input_bar)
+        input_bar_lay.setContentsMargins(8, 6, 8, 6)
+        input_bar_lay.setSpacing(6)
+
         self.ai_input = QTextEdit()
         self.ai_input.setMaximumHeight(80)
-        self.ai_input.setFont(font_ai)
-        self.ai_input.setPlaceholderText("Message AI...")
-        input_layout.addWidget(self.ai_input)
-        
-        btn_layout = QVBoxLayout()
+        self.ai_input.setMinimumHeight(44)
+        self.ai_input.setFont(QFont("Consolas", 10))
+        self.ai_input.setPlaceholderText("Message AI…  (Ctrl+Enter to send)")
+        self.ai_input.setStyleSheet(
+            "QTextEdit{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
+            "border-radius:4px;padding:4px 8px;font-family:Consolas;}"
+            "QTextEdit:focus{border:1px solid #4EC9B0;}"
+        )
+        self.ai_input.installEventFilter(self)
+        input_bar_lay.addWidget(self.ai_input)
+
+        btn_col = QVBoxLayout()
+        btn_col.setSpacing(4)
         self.ai_send_btn = QPushButton("➤")
-        self.ai_send_btn.setFixedSize(40, 35)
-        self.ai_send_btn.setFont(QFont("Segoe UI", 14))
+        self.ai_send_btn.setFixedSize(38, 34)
+        self.ai_send_btn.setFont(QFont("Segoe UI", 13))
+        self.ai_send_btn.setToolTip("Send (Ctrl+Enter)")
+        self.ai_send_btn.setStyleSheet(
+            "QPushButton{background:#0e639c;color:#fff;border:none;border-radius:4px;}"
+            "QPushButton:hover{background:#1177bb;}"
+            "QPushButton:disabled{background:#3c3c3c;color:#666;}"
+        )
         self.ai_send_btn.clicked.connect(self.ask_ai)
-        
+
         self.ai_stop_btn = QPushButton("⏹")
-        self.ai_stop_btn.setFixedSize(40, 35)
-        self.ai_stop_btn.setFont(QFont("Segoe UI", 12))
+        self.ai_stop_btn.setFixedSize(38, 34)
+        self.ai_stop_btn.setFont(QFont("Segoe UI", 11))
+        self.ai_stop_btn.setToolTip("Stop generation")
+        self.ai_stop_btn.setStyleSheet(
+            "QPushButton{background:#5c2020;color:#fff;border:none;border-radius:4px;}"
+            "QPushButton:hover{background:#7a2a2a;}"
+            "QPushButton:disabled{background:#3c3c3c;color:#666;}"
+        )
         self.ai_stop_btn.clicked.connect(self.stop_ai)
         self.ai_stop_btn.setEnabled(False)
-        
-        btn_layout.addWidget(self.ai_send_btn)
-        btn_layout.addWidget(self.ai_stop_btn)
-        input_layout.addLayout(btn_layout)
-        
-        ai_layout.addLayout(input_layout)
-        
+
+        btn_col.addWidget(self.ai_send_btn)
+        btn_col.addWidget(self.ai_stop_btn)
+        input_bar_lay.addLayout(btn_col)
+        ai_layout.addWidget(input_bar)
+
         self.ai_dock.setWidget(ai_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
+
+        # Populate key selector
+        self._reload_key_combo()
         
         # Tabify VIO dock under AI dock (right side)
         self.tabifyDockWidget(self.ai_dock, self.vio_dock)
@@ -784,15 +1170,66 @@ class VerilogIDE(QMainWindow):
         # Try to load available models
         self.refresh_ollama_models()
 
+    # ── API Key Manager helpers ───────────────────────────────────────────────
+    def load_api_keys(self) -> list:
+        """Return the list of key profiles from api_keys.json."""
+        if os.path.exists(API_KEYS_FILE):
+            try:
+                with open(API_KEYS_FILE, "r") as f:
+                    return json.load(f).get("keys", [])
+            except Exception:
+                pass
+        return []
+
+    def get_active_key(self) -> dict:
+        """Return the currently selected key profile dict (or a default)."""
+        profiles = self.load_api_keys()
+        if not profiles:
+            return {"name": "default", "key": OLLAMA_CLOUD_API_KEY,
+                    "base_url": OLLAMA_CLOUD_BASE_URL, "model": ""}
+        idx = self.ai_key_combo.currentIndex()
+        idx = max(0, min(idx, len(profiles) - 1))
+        return profiles[idx]
+
+    def _reload_key_combo(self):
+        """Refresh the key-selector combo from disk."""
+        profiles = self.load_api_keys()
+        if not profiles:
+            # seed default
+            profiles = [{"name": "Ollama Cloud (default)",
+                         "provider": "Ollama",
+                         "base_url": OLLAMA_CLOUD_BASE_URL,
+                         "key": OLLAMA_CLOUD_API_KEY,
+                         "model": "llama3.2"}]
+        prev = self.ai_key_combo.currentText()
+        self.ai_key_combo.clear()
+        for p in profiles:
+            self.ai_key_combo.addItem(f"🔑 {p.get('name', 'Unnamed')}")
+        # restore selection
+        idx = self.ai_key_combo.findText(prev)
+        if idx >= 0:
+            self.ai_key_combo.setCurrentIndex(idx)
+        # pre-fill model from profile
+        active = self.get_active_key()
+        if active.get("model"):
+            idx_m = self.ai_model_combo.findText(active["model"])
+            if idx_m >= 0:
+                self.ai_model_combo.setCurrentIndex(idx_m)
+
+    def show_api_key_manager(self):
+        dlg = APIKeyManagerDialog(self)
+        dlg.exec()
+        self._reload_key_combo()   # refresh after edits
+
     def refresh_ollama_models(self):
-        api_key = self.ai_api_key_input.text().strip() if hasattr(self, 'ai_api_key_input') else OLLAMA_CLOUD_API_KEY
+        profile = self.get_active_key() if hasattr(self, 'ai_key_combo') else {}
+        api_key = profile.get("key", OLLAMA_CLOUD_API_KEY)
+        base_url = profile.get("base_url", OLLAMA_CLOUD_BASE_URL).rstrip('/')
         if not api_key:
             return
         try:
-            headers = {
-                'Authorization': f'Bearer {api_key}'
-            }
-            req = urllib.request.Request(f"{OLLAMA_CLOUD_BASE_URL}/api/tags", headers=headers)
+            headers = {'Authorization': f'Bearer {api_key}'}
+            req = urllib.request.Request(f"{base_url}/api/tags", headers=headers)
             with urllib.request.urlopen(req, timeout=5) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 models = [m["name"] for m in result.get("models", [])]
@@ -805,33 +1242,134 @@ class VerilogIDE(QMainWindow):
         except Exception:
             pass  # Fail silently – keep the default list
 
+    # ── Chat bubble helpers ───────────────────────────────────────────────────
+    def _add_chat_bubble(self, text: str, role: str):
+        """Append a styled bubble to the chat scroll area.
+        role: 'user' | 'assistant' | 'system' | 'error'
+        """
+        import datetime
+        ts = datetime.datetime.now().strftime("%H:%M")
+
+        bubble = QWidget()
+        b_lay = QVBoxLayout(bubble)
+        b_lay.setContentsMargins(0, 0, 0, 0)
+        b_lay.setSpacing(2)
+
+        if role == "user":
+            bubble_color = "#1a3a5c"
+            border_color = "#0e639c"
+            label_text  = "You"
+            label_color = "#4EC9B0"
+            align = Qt.AlignmentFlag.AlignRight
+        elif role == "assistant":
+            bubble_color = "#252526"
+            border_color = "#3a3a3a"
+            label_text  = f"AI ({self.ai_model_combo.currentText()})"
+            label_color = "#9CDCFE"
+            align = Qt.AlignmentFlag.AlignLeft
+        elif role == "error":
+            bubble_color = "#3a1010"
+            border_color = "#F44747"
+            label_text  = "Error"
+            label_color = "#F44747"
+            align = Qt.AlignmentFlag.AlignLeft
+        else:  # system
+            bubble_color = "#2d2d00"
+            border_color = "#888800"
+            label_text  = "System"
+            label_color = "#DCDCAA"
+            align = Qt.AlignmentFlag.AlignLeft
+
+        # Header row: role label + timestamp
+        hdr = QLabel(f"<b>{label_text}</b>  <span style='color:#666;font-size:9px;'>{ts}</span>")
+        hdr.setStyleSheet(f"color:{label_color}; font-size:10px; padding:0;")
+        b_lay.addWidget(hdr, alignment=align)
+
+        # Content label (selectable)
+        msg_lbl = QTextEdit()
+        msg_lbl.setReadOnly(True)
+        msg_lbl.setFont(QFont("Consolas", 10))
+        msg_lbl.setStyleSheet(
+            f"QTextEdit{{background:{bubble_color}; color:#d4d4d4;"
+            f"border:1px solid {border_color}; border-radius:6px;"
+            f"padding:8px 10px; font-family:Consolas;}}"
+        )
+        # Format code blocks
+        formatted = self._format_bubble_text(text)
+        msg_lbl.setHtml(formatted)
+        # Auto-height
+        msg_lbl.document().setTextWidth(msg_lbl.viewport().width())
+        doc_h = int(msg_lbl.document().size().height()) + 20
+        msg_lbl.setFixedHeight(min(max(doc_h, 60), 600))
+        msg_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        b_lay.addWidget(msg_lbl)
+
+        # Insert before the trailing stretch
+        count = self.ai_chat_layout.count()
+        self.ai_chat_layout.insertWidget(count - 1, bubble)
+
+        # Scroll to bottom
+        QApplication.processEvents()
+        vsb = self.ai_scroll.verticalScrollBar()
+        vsb.setValue(vsb.maximum())
+
+    @staticmethod
+    def _format_bubble_text(text: str) -> str:
+        """Convert markdown-ish code fences to colored HTML for the bubble."""
+        import re as _re
+        # Escape HTML first
+        escaped = html.escape(text)
+        # Replace ```lang\n...\n``` with styled pre block
+        def replace_fence(m):
+            code = m.group(2)
+            return (f"<pre style='background:#1e1e1e;color:#CE9178;"
+                    f"border:1px solid #555;border-radius:4px;"
+                    f"padding:8px;margin:4px 0;white-space:pre-wrap;'>"
+                    f"{code}</pre>")
+        result = _re.sub(r'```[a-zA-Z]*\n(.*?)```|```(.*?)```',
+                         replace_fence, escaped, flags=_re.DOTALL)
+        # Inline code `...`
+        result = _re.sub(r'`([^`]+)`',
+                         r"<code style='background:#3c3c3c;color:#CE9178;"
+                         r"border-radius:3px;padding:1px 4px;'>\1</code>",
+                         result)
+        # Bold **...**
+        result = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', result)
+        # Newlines
+        result = result.replace('\n', '<br>')
+        return result
+
     def stop_ai(self):
         if hasattr(self, 'ai_worker') and self.ai_worker.isRunning():
             self.ai_worker.stop()
             self.ai_send_btn.setEnabled(True)
             self.ai_stop_btn.setEnabled(False)
-            cursor = self.ai_output.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            cursor.select(cursor.SelectionType.BlockUnderCursor)
-            cursor.removeSelectedText()
-            self.ai_output.append("<i style='color:orange;'>Stopped.</i>")
+            self._add_chat_bubble("Generation stopped.", "system")
 
     def ask_ai(self):
         prompt = self.ai_input.toPlainText().strip()
-        if not prompt: return
-        
+        if not prompt:
+            return
+
         model = self.ai_model_combo.currentText() or "llama3.2"
-        api_key = self.ai_api_key_input.text().strip() or OLLAMA_CLOUD_API_KEY
+        profile = self.get_active_key()
+        api_key = profile.get("key", "") or OLLAMA_CLOUD_API_KEY
+        base_url = profile.get("base_url", OLLAMA_CLOUD_BASE_URL)
+        max_tokens = int(self.ai_ctx_combo.currentText())
 
         if not api_key:
-            self.ai_output.append("<b style='color:red;'>Error:</b> No API key provided. Please enter your Ollama Cloud API key.")
+            self._add_chat_bubble("No API key configured. Go to Edit → Manage API Keys to add one.", "error")
             return
-            
+
         self.ai_send_btn.setEnabled(False)
         self.ai_stop_btn.setEnabled(True)
-        self.ai_output.append(f"<br><b>You:</b> {html.escape(prompt)}")
-        self.ai_output.append("<i>Generating... (Ollama Cloud)</i>")
-        
+        self.ai_input.clear()
+
+        # Show user bubble
+        self._add_chat_bubble(prompt, "user")
+        # Placeholder thinking bubble
+        self._add_chat_bubble("Generating…", "system")
+
         context = ""
         active_file_name = "Untitled"
         target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
@@ -841,7 +1379,7 @@ class VerilogIDE(QMainWindow):
             idx = target_tabs.indexOf(current_editor)
             if idx >= 0:
                 active_file_name = target_tabs.tabText(idx)
-            
+
         system_prompt = (
             "You are an advanced AI coding assistant integrated into a Verilog IDE.\n"
             "You can create or edit files directly. To create a new file, your response MUST contain exactly:\n"
@@ -850,13 +1388,17 @@ class VerilogIDE(QMainWindow):
             "[EDIT_ACTIVE_FILE]\n```verilog\n// complete new code here\n```\n\n"
             "Always output the full file content without placeholders when using these tags."
         )
-        
         if context:
             system_prompt += f"\n\nCURRENT ACTIVE FILE ({active_file_name}):\n```verilog\n{context}\n```"
-            
-        messages = [{"role": "system", "content": system_prompt}] + self.chat_history + [{"role": "user", "content": prompt}]
-            
-        self.ai_worker = OllamaWorker(model, messages, api_key=api_key)
+
+        messages = ([{"role": "system", "content": system_prompt}]
+                    + self.chat_history
+                    + [{"role": "user", "content": prompt}])
+
+        self.ai_worker = OllamaWorker(model, messages,
+                                      api_key=api_key,
+                                      base_url=base_url,
+                                      max_tokens=max_tokens)
         self.ai_worker.finished.connect(self.on_ai_finished)
         self.ai_worker.error.connect(self.on_ai_error)
         self.ai_worker.start()
@@ -864,24 +1406,27 @@ class VerilogIDE(QMainWindow):
     def on_ai_finished(self, response):
         self.ai_send_btn.setEnabled(True)
         self.ai_stop_btn.setEnabled(False)
-        cursor = self.ai_output.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.select(cursor.SelectionType.BlockUnderCursor)
-        cursor.removeSelectedText()
-        
-        self.ai_input.clear()
-        
+
+        # Remove the "Generating…" system bubble (last widget before stretch)
+        count = self.ai_chat_layout.count()
+        if count > 1:
+            item = self.ai_chat_layout.itemAt(count - 2)
+            if item and item.widget():
+                item.widget().deleteLater()
+
         # Add to chat history
         prompt = self.ai_worker.messages[-1]["content"]
         self.chat_history.append({"role": "user", "content": prompt})
         self.chat_history.append({"role": "assistant", "content": response})
         self.save_ai_memory()
-        
-        # Display response
-        self.ai_output.append(f"<b>AI ({self.ai_worker.model}):</b><br><pre>{html.escape(response)}</pre>")
-        
-        # Parse for creations/edits
-        create_matches = re.finditer(r'\[CREATE_FILE:\s*([^\]\s]+)\]\s*```(?:verilog|v)?\n(.*?)\n?```', response, re.DOTALL | re.IGNORECASE)
+
+        # Show AI bubble
+        self._add_chat_bubble(response, "assistant")
+
+        # Parse for file actions and show notifications
+        create_matches = re.finditer(
+            r'\[CREATE_FILE:\s*([^\]\s]+)\]\s*```(?:verilog|v)?\n(.*?)\n?```',
+            response, re.DOTALL | re.IGNORECASE)
         for match in create_matches:
             filename = match.group(1).strip()
             code = match.group(2)
@@ -891,29 +1436,33 @@ class VerilogIDE(QMainWindow):
                 with open(filepath, 'w') as f:
                     f.write(code)
                 self.open_file(filepath)
-                self.ai_output.append(f"<i style='color:green;'>Created and opened file: {filename}</i>")
+                self._add_chat_bubble(f"✅ Created and opened: **{filename}**", "system")
             except Exception as e:
-                self.ai_output.append(f"<b style='color:red;'>Failed to create file {filename}: {e}</b>")
-                
-        edit_matches = re.finditer(r'\[EDIT_ACTIVE_FILE\]\s*```(?:verilog|v)?\n(.*?)```', response, re.DOTALL | re.IGNORECASE)
+                self._add_chat_bubble(f"❌ Failed to create {filename}: {e}", "error")
+
+        edit_matches = re.finditer(
+            r'\[EDIT_ACTIVE_FILE\]\s*```(?:verilog|v)?\n(.*?)```',
+            response, re.DOTALL | re.IGNORECASE)
         for match in edit_matches:
             code = match.group(1)
             target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
             current_editor = target_tabs.currentWidget()
             if current_editor:
                 current_editor.setPlainText(code)
-                self.ai_output.append("<i style='color:green;'>Updated active file.</i>")
+                self._add_chat_bubble("✅ Active file updated.", "system")
             else:
-                self.ai_output.append("<b style='color:red;'>No active file to edit.</b>")
+                self._add_chat_bubble("❌ No active file to edit.", "error")
 
     def on_ai_error(self, error):
         self.ai_send_btn.setEnabled(True)
         self.ai_stop_btn.setEnabled(False)
-        cursor = self.ai_output.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.select(cursor.SelectionType.BlockUnderCursor)
-        cursor.removeSelectedText()
-        self.ai_output.append(f"<b style='color:red;'>Error:</b> {error}")
+        # Remove "Generating…" placeholder
+        count = self.ai_chat_layout.count()
+        if count > 1:
+            item = self.ai_chat_layout.itemAt(count - 2)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._add_chat_bubble(error, "error")
 
     def new_project(self):
         dlg = NewProjectDialog(self)
@@ -958,7 +1507,11 @@ class VerilogIDE(QMainWindow):
         
     def load_ai_memory(self):
         self.chat_history = []
-        self.ai_output.clear()
+        # Clear chat bubbles (keep trailing stretch)
+        while self.ai_chat_layout.count() > 1:
+            item = self.ai_chat_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         if not self.current_project_dir: return
         
         mem_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_memories.json")
@@ -970,8 +1523,8 @@ class VerilogIDE(QMainWindow):
                     self.chat_history = data[self.current_project_dir]
                     for msg in self.chat_history:
                         if msg["role"] == "system": continue
-                        role = "You" if msg["role"] == "user" else "AI"
-                        self.ai_output.append(f"<b>{role}:</b><br><pre>{html.escape(msg['content'])}</pre>")
+                        role = "user" if msg["role"] == "user" else "assistant"
+                        self._add_chat_bubble(msg['content'], role)
             except:
                 pass
 
@@ -1178,6 +1731,17 @@ class VerilogIDE(QMainWindow):
         current_editor = target_tabs.currentWidget()
         if current_editor:
             current_editor.redo()
+
+    def eventFilter(self, obj, event):
+        """Catch Ctrl+Enter in ai_input to send message."""
+        from PyQt6.QtCore import QEvent
+        if (obj is self.ai_input
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Return
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            self.ask_ai()
+            return True
+        return super().eventFilter(obj, event)
             
     def run_simulation(self):
         self.save_file() # Auto-save before running
