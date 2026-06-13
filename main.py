@@ -431,14 +431,21 @@ class TerminalWidget(QWidget):
         return ps if ps else "cmd.exe"
 
     def _build_args(self, cmd: str) -> tuple[str, list[str]]:
-        """Return (exe, args) to run `cmd` as a one-shot subprocess."""
-        exe = self._shell_executable()
-        if "powershell" in exe.lower():
-            # Set-Location first so relative paths work, then run the command
-            ps_cmd = f"Set-Location -LiteralPath '{self._cwd}'; {cmd}"
-            return exe, ["-NoLogo", "-NonInteractive", "-Command", ps_cmd]
-        else:
-            return "cmd.exe", ["/c", f'cd /d "{self._cwd}" && {cmd}']
+        """Return (exe, args) to run `cmd` as a one-shot subprocess.
+        
+        Uses cmd.exe /c by default – most reliable on Windows for all
+        path forms (spaces, drive letters, UNC, etc.).
+        If the user explicitly wants PowerShell, they can prefix with 'ps:'.
+        """
+        # Allow ps: prefix to explicitly use PowerShell
+        if cmd.lower().startswith("ps:"):
+            ps_cmd = cmd[3:].strip()
+            exe = self._shell_executable()
+            # PowerShell: use escaped double-quotes and cd via push
+            full = f'Push-Location "{self._cwd}"; {ps_cmd}; Pop-Location'
+            return exe, ["-NoLogo", "-NonInteractive", "-Command", full]
+        # Default: cmd.exe /c — handles spaces and all drive paths fine
+        return "cmd.exe", ["/c", f'cd /d "{self._cwd}" && {cmd}']
 
     # ── Commands ────────────────────────────────────────────────────
     def _send_command(self):
@@ -899,12 +906,157 @@ class VerilogIDE(QMainWindow):
         if theme_name in self.themes:
             stylesheet = self.themes[theme_name].get("stylesheet", "")
             self.setStyleSheet(stylesheet)
-        # Propagate theme to terminal and VIO board
+        # Propagate theme to terminal, VIO board, and AI panel
         if hasattr(self, 'terminal_widget'):
             self.terminal_widget.apply_theme(theme_name)
         if hasattr(self, 'vio_dashboard'):
             self.vio_dashboard.apply_theme(theme_name)
-            
+        if hasattr(self, '_ai_theme_name'):
+            self._ai_theme_name = theme_name
+            self._apply_ai_palette()
+
+    def _apply_ai_palette(self):
+        """Apply light or dark colors to all AI Coding Assistant panel widgets."""
+        t = getattr(self, '_ai_theme_name', 'light')
+        is_light = (t == 'light')
+
+        if is_light:
+            panel_bg       = "#f5f7fa"
+            header_bg      = "#e8edf5"
+            header_border  = "#c8d4e8"
+            chat_bg        = "#f0f4fb"
+            input_bar_bg   = "#e8edf5"
+            input_bar_bdr  = "#c8d4e8"
+            combo_bg       = "#ffffff"
+            combo_fg       = "#1a1a2e"
+            combo_border   = "#b0bec5"
+            combo_dd_bg    = "#f0f4fb"
+            input_bg       = "#ffffff"
+            input_fg       = "#1a1a2e"
+            input_border   = "#b0bec5"
+            input_focus    = "#1565c0"
+            lbl_fg         = "#0d47a1"
+            ctx_fg         = "#546e7a"
+            scroll_bg      = "#f0f4fb"
+            scroll_handle  = "#90a4ae"
+            send_bg        = "#1565c0"
+            send_hover     = "#1976d2"
+            send_disabled  = "#b0bec5"
+            send_dis_fg    = "#78909c"
+            stop_bg        = "#c62828"
+            stop_hover     = "#d32f2f"
+            btn_bg         = "#e3eaf5"
+            btn_fg         = "#1a3a6a"
+            btn_border     = "#90a4ae"
+            btn_hover      = "#ccd8ee"
+        else:
+            panel_bg       = "#1e1e1e"
+            header_bg      = "#252526"
+            header_border  = "#3a3a3a"
+            chat_bg        = "#1e1e1e"
+            input_bar_bg   = "#252526"
+            input_bar_bdr  = "#3a3a3a"
+            combo_bg       = "#3c3c3c"
+            combo_fg       = "#d4d4d4"
+            combo_border   = "#555555"
+            combo_dd_bg    = "#2d2d2d"
+            input_bg       = "#3c3c3c"
+            input_fg       = "#d4d4d4"
+            input_border   = "#555555"
+            input_focus    = "#4EC9B0"
+            lbl_fg         = "#9CDCFE"
+            ctx_fg         = "#888888"
+            scroll_bg      = "#252526"
+            scroll_handle  = "#555555"
+            send_bg        = "#0e639c"
+            send_hover     = "#1177bb"
+            send_disabled  = "#3c3c3c"
+            send_dis_fg    = "#666666"
+            stop_bg        = "#5c2020"
+            stop_hover     = "#7a2a2a"
+            btn_bg         = "#3c3c3c"
+            btn_fg         = "#d4d4d4"
+            btn_border     = "#555555"
+            btn_hover      = "#505050"
+
+        combo_ss = (
+            f"QComboBox{{background:{combo_bg};color:{combo_fg};border:1px solid {combo_border};"
+            f"border-radius:3px;padding:3px 6px;font-size:11px;}}"
+            f"QComboBox::drop-down{{border:none;}}"
+            f"QComboBox QAbstractItemView{{background:{combo_dd_bg};color:{combo_fg};}}"
+        )
+        btn_ss = (
+            f"QPushButton{{background:{btn_bg};color:{btn_fg};border:1px solid {btn_border};"
+            f"border-radius:4px;padding:3px 8px;}}"
+            f"QPushButton:hover{{background:{btn_hover};}}"
+        )
+
+        if hasattr(self, '_ai_widget'):
+            self._ai_widget.setStyleSheet(f"background:{panel_bg};")
+        if hasattr(self, '_ai_header'):
+            self._ai_header.setStyleSheet(
+                f"background:{header_bg}; border-bottom:1px solid {header_border};"
+            )
+        if hasattr(self, '_ai_key_icon'):
+            self._ai_key_icon.setStyleSheet(f"color:{lbl_fg};font-size:11px;font-weight:bold;")
+        if hasattr(self, '_ai_model_lbl'):
+            self._ai_model_lbl.setStyleSheet(f"color:{lbl_fg};font-size:11px;font-weight:bold;")
+        if hasattr(self, '_ai_ctx_lbl'):
+            self._ai_ctx_lbl.setStyleSheet(f"color:{ctx_fg};font-size:10px;")
+        if hasattr(self, '_ai_ctx_lbl2'):
+            self._ai_ctx_lbl2.setStyleSheet(f"color:{ctx_fg};font-size:10px;")
+        if hasattr(self, 'ai_key_combo'):
+            self.ai_key_combo.setStyleSheet(combo_ss)
+        if hasattr(self, 'ai_model_combo'):
+            self.ai_model_combo.setStyleSheet(combo_ss)
+        if hasattr(self, 'ai_ctx_combo'):
+            self.ai_ctx_combo.setStyleSheet(combo_ss)
+        if hasattr(self, '_ai_manage_btn'):
+            self._ai_manage_btn.setStyleSheet(btn_ss)
+        if hasattr(self, 'ai_refresh_btn'):
+            self.ai_refresh_btn.setStyleSheet(btn_ss)
+        if hasattr(self, 'ai_scroll'):
+            self.ai_scroll.setStyleSheet(
+                f"QScrollArea{{border:none; background:{scroll_bg};}}"
+                f"QScrollBar:vertical{{background:{scroll_bg};width:8px;border-radius:4px;}}"
+                f"QScrollBar::handle:vertical{{background:{scroll_handle};border-radius:4px;min-height:20px;}}"
+            )
+        if hasattr(self, 'ai_chat_container'):
+            self.ai_chat_container.setStyleSheet(f"background:{chat_bg};")
+        if hasattr(self, '_ai_input_bar'):
+            self._ai_input_bar.setStyleSheet(
+                f"background:{input_bar_bg}; border-top:1px solid {input_bar_bdr};"
+            )
+        if hasattr(self, 'ai_input'):
+            self.ai_input.setStyleSheet(
+                f"QTextEdit{{background:{input_bg};color:{input_fg};border:1px solid {input_border};"
+                f"border-radius:4px;padding:4px 8px;font-family:Consolas;}}"
+                f"QTextEdit:focus{{border:1px solid {input_focus};}}"
+            )
+        if hasattr(self, 'ai_send_btn'):
+            self.ai_send_btn.setStyleSheet(
+                f"QPushButton{{background:{send_bg};color:#fff;border:none;border-radius:4px;font-weight:bold;}}"
+                f"QPushButton:hover{{background:{send_hover};}}"
+                f"QPushButton:disabled{{background:{send_disabled};color:{send_dis_fg};}}"
+            )
+        if hasattr(self, 'ai_stop_btn'):
+            self.ai_stop_btn.setStyleSheet(
+                f"QPushButton{{background:{stop_bg};color:#fff;border:none;border-radius:4px;font-weight:bold;}}"
+                f"QPushButton:hover{{background:{stop_hover};}}"
+                f"QPushButton:disabled{{background:{send_disabled};color:{send_dis_fg};}}"
+            )
+        # Console toolbar buttons
+        console_btn_ss = (
+            f"QPushButton{{background:{btn_bg};color:{btn_fg};border:1px solid {btn_border};"
+            f"border-radius:4px;padding:2px 10px;font-size:9pt;}}"
+            f"QPushButton:hover{{background:{btn_hover};}}"
+        )
+        if hasattr(self, '_console_send_ai_btn'):
+            self._console_send_ai_btn.setStyleSheet(console_btn_ss)
+        if hasattr(self, '_console_clear_btn'):
+            self._console_clear_btn.setStyleSheet(console_btn_ss)
+
+
     def setup_ui(self):
         # Menu Bar
         menubar = self.menuBar()
@@ -1057,14 +1209,57 @@ class VerilogIDE(QMainWindow):
 
         # Dock: Output Console
         self.console_dock = QDockWidget("Debug Console / Terminal", self)
+
+        # Wrap console in a container with a toolbar
+        console_container = QWidget()
+        console_vlay = QVBoxLayout(console_container)
+        console_vlay.setContentsMargins(0, 0, 0, 0)
+        console_vlay.setSpacing(0)
+
+        # ── Console toolbar ──────────────────────────────────────────
+        console_toolbar = QWidget()
+        console_toolbar.setFixedHeight(34)
+        ctb_lay = QHBoxLayout(console_toolbar)
+        ctb_lay.setContentsMargins(6, 3, 6, 3)
+        ctb_lay.setSpacing(6)
+
+        ctb_lay.addStretch()
+
+        self._console_send_ai_btn = QPushButton("📋 Insert in AI Chat")
+        self._console_send_ai_btn.setToolTip(
+            "Insert the full Debug Console output into the AI chat input box.\n"
+            "You can then edit/add context and send it manually."
+        )
+        self._console_send_ai_btn.setFont(QFont("Segoe UI", 9))
+        self._console_send_ai_btn.clicked.connect(self._insert_console_to_ai)
+        ctb_lay.addWidget(self._console_send_ai_btn)
+
+        clear_console_btn = QPushButton("🗑 Clear")
+        clear_console_btn.setToolTip("Clear the debug console")
+        clear_console_btn.setFont(QFont("Segoe UI", 9))
+        clear_console_btn.clicked.connect(self.console_output.clear if hasattr(self, 'console_output') else lambda: None)
+        ctb_lay.addWidget(clear_console_btn)
+        self._console_clear_btn = clear_console_btn
+
+        console_toolbar.setLayout(ctb_lay)
+        console_vlay.addWidget(console_toolbar)
+
+        # ── Console output ───────────────────────────────────────────
         self.console_output = QPlainTextEdit()
         self.console_output.setReadOnly(True)
         font = QFont("Consolas", 11)
         self.console_output.setFont(font)
-        self.console_dock.setWidget(self.console_output)
+        console_vlay.addWidget(self.console_output)
+
+        # Wire the clear button now that console_output exists
+        clear_console_btn.clicked.disconnect()
+        clear_console_btn.clicked.connect(self.console_output.clear)
+
+        self.console_dock.setWidget(console_container)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.console_dock)
         
         self.tabifyDockWidget(self.ila_dock, self.console_dock)
+
 
         # Dock: Integrated Terminal
         self.terminal_dock = QDockWidget("Terminal", self)
@@ -1076,16 +1271,17 @@ class VerilogIDE(QMainWindow):
         # Dock: AI Coding Assistant (redesigned)
         self.ai_dock = QDockWidget("AI Coding Assistant", self)
         self.ai_dock.setMinimumWidth(420)
+        # ── AI widget (theme-aware refs stored as self._ai_*) ──────────────────
+        self._ai_theme_name = "light"  # will be set properly by apply_theme
         ai_widget = QWidget()
-        ai_widget.setStyleSheet("background:#1e1e1e;")
+        self._ai_widget = ai_widget
         ai_layout = QVBoxLayout(ai_widget)
         ai_layout.setContentsMargins(0, 0, 0, 0)
         ai_layout.setSpacing(0)
 
         # ── Header bar ────────────────────────────────────────────────────────
-        header = QWidget()
-        header.setStyleSheet("background:#252526; border-bottom:1px solid #3a3a3a;")
-        header_lay = QVBoxLayout(header)
+        self._ai_header = QWidget()
+        header_lay = QVBoxLayout(self._ai_header)
         header_lay.setContentsMargins(8, 6, 8, 6)
         header_lay.setSpacing(4)
 
@@ -1093,51 +1289,35 @@ class VerilogIDE(QMainWindow):
         row1 = QHBoxLayout()
         row1.setSpacing(6)
 
-        key_icon = QLabel("🔑")
-        row1.addWidget(key_icon)
+        self._ai_key_icon = QLabel("🔑 API Key")
+        self._ai_key_icon.setStyleSheet("font-size:11px;font-weight:bold;")
+        row1.addWidget(self._ai_key_icon)
 
         self.ai_key_combo = QComboBox()
-        self.ai_key_combo.setToolTip("Select saved API key profile (keys are never shown here)")
+        self.ai_key_combo.setToolTip("Select saved API key profile")
         self.ai_key_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.ai_key_combo.setStyleSheet(
-            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
-            "border-radius:3px;padding:3px 6px;font-size:11px;}"
-            "QComboBox::drop-down{border:none;}"
-            "QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
-        )
         row1.addWidget(self.ai_key_combo)
 
-        manage_btn = QPushButton("⚙")
-        manage_btn.setFixedWidth(28)
-        manage_btn.setToolTip("Manage API Keys (Edit → Manage API Keys)")
-        manage_btn.setStyleSheet(
-            "QPushButton{background:#3c3c3c;color:#9CDCFE;border:1px solid #555;"
-            "border-radius:3px;font-size:13px;padding:2px;}"
-            "QPushButton:hover{background:#505050;}"
-        )
-        manage_btn.clicked.connect(self.show_api_key_manager)
-        row1.addWidget(manage_btn)
+        self._ai_manage_btn = QPushButton("⚙ Keys")
+        self._ai_manage_btn.setFixedWidth(60)
+        self._ai_manage_btn.setFont(QFont("Segoe UI", 9))
+        self._ai_manage_btn.setToolTip("Manage API Keys")
+        self._ai_manage_btn.clicked.connect(self.show_api_key_manager)
+        row1.addWidget(self._ai_manage_btn)
 
-        row1.addWidget(QLabel("Model:"))
+        self._ai_model_lbl = QLabel("🤖 Model:")
+        self._ai_model_lbl.setStyleSheet("font-size:11px;font-weight:bold;")
+        row1.addWidget(self._ai_model_lbl)
+
         self.ai_model_combo = QComboBox()
         self.ai_model_combo.addItems(["llama3.2", "llama3", "llama3.1", "gemma3:4b",
                                       "qwen2.5-coder:7b", "deepseek-coder-v2", "mistral", "codellama"])
-        self.ai_model_combo.setStyleSheet(
-            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
-            "border-radius:3px;padding:3px 6px;font-size:11px;}"
-            "QComboBox::drop-down{border:none;}"
-            "QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
-        )
         row1.addWidget(self.ai_model_combo)
 
-        self.ai_refresh_btn = QPushButton("↻")
-        self.ai_refresh_btn.setFixedWidth(28)
+        self.ai_refresh_btn = QPushButton("🔄")
+        self.ai_refresh_btn.setFixedWidth(32)
+        self.ai_refresh_btn.setFont(QFont("Segoe UI", 11))
         self.ai_refresh_btn.setToolTip("Refresh available models")
-        self.ai_refresh_btn.setStyleSheet(
-            "QPushButton{background:#3c3c3c;color:#4EC9B0;border:1px solid #555;"
-            "border-radius:3px;font-size:14px;padding:2px;}"
-            "QPushButton:hover{background:#505050;}"
-        )
         self.ai_refresh_btn.clicked.connect(self.refresh_ollama_models)
         row1.addWidget(self.ai_refresh_btn)
         header_lay.addLayout(row1)
@@ -1145,37 +1325,25 @@ class VerilogIDE(QMainWindow):
         # Row 2: Context window
         row2 = QHBoxLayout()
         row2.setSpacing(6)
-        ctx_lbl = QLabel("Context window:")
-        ctx_lbl.setStyleSheet("color:#888; font-size:10px;")
-        row2.addWidget(ctx_lbl)
+        self._ai_ctx_lbl = QLabel("📏 Context:")
+        self._ai_ctx_lbl.setStyleSheet("font-size:10px;")
+        row2.addWidget(self._ai_ctx_lbl)
         self.ai_ctx_combo = QComboBox()
         self.ai_ctx_combo.addItems(["1024", "2048", "4096", "8192", "16384", "32768"])
         self.ai_ctx_combo.setCurrentText("4096")
         self.ai_ctx_combo.setFixedWidth(90)
-        self.ai_ctx_combo.setStyleSheet(
-            "QComboBox{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
-            "border-radius:3px;padding:2px 6px;font-size:10px;}"
-            "QComboBox::drop-down{border:none;}"
-            "QComboBox QAbstractItemView{background:#2d2d2d;color:#d4d4d4;}"
-        )
         row2.addWidget(self.ai_ctx_combo)
-        ctx_lbl2 = QLabel("tokens")
-        ctx_lbl2.setStyleSheet("color:#888; font-size:10px;")
-        row2.addWidget(ctx_lbl2)
+        self._ai_ctx_lbl2 = QLabel("tokens")
+        self._ai_ctx_lbl2.setStyleSheet("font-size:10px;")
+        row2.addWidget(self._ai_ctx_lbl2)
         row2.addStretch()
         header_lay.addLayout(row2)
-        ai_layout.addWidget(header)
+        ai_layout.addWidget(self._ai_header)
 
         # ── Chat scroll area ──────────────────────────────────────────────────
         self.ai_scroll = QScrollArea()
         self.ai_scroll.setWidgetResizable(True)
-        self.ai_scroll.setStyleSheet(
-            "QScrollArea{border:none; background:#1e1e1e;}"
-            "QScrollBar:vertical{background:#252526;width:8px;border-radius:4px;}"
-            "QScrollBar::handle:vertical{background:#555;border-radius:4px;min-height:20px;}"
-        )
         self.ai_chat_container = QWidget()
-        self.ai_chat_container.setStyleSheet("background:#1e1e1e;")
         self.ai_chat_layout = QVBoxLayout(self.ai_chat_container)
         self.ai_chat_layout.setContentsMargins(8, 8, 8, 8)
         self.ai_chat_layout.setSpacing(10)
@@ -1183,14 +1351,13 @@ class VerilogIDE(QMainWindow):
         self.ai_scroll.setWidget(self.ai_chat_container)
         ai_layout.addWidget(self.ai_scroll, stretch=1)
 
-        # Keep a QTextEdit alias for backward compat with stop_ai/on_ai_error
-        self.ai_output = QTextEdit()   # hidden, kept for compat
+        # Keep a QTextEdit alias for backward compat
+        self.ai_output = QTextEdit()
         self.ai_output.setVisible(False)
 
         # ── Input bar ─────────────────────────────────────────────────────────
-        input_bar = QWidget()
-        input_bar.setStyleSheet("background:#252526; border-top:1px solid #3a3a3a;")
-        input_bar_lay = QHBoxLayout(input_bar)
+        self._ai_input_bar = QWidget()
+        input_bar_lay = QHBoxLayout(self._ai_input_bar)
         input_bar_lay.setContentsMargins(8, 6, 8, 6)
         input_bar_lay.setSpacing(6)
 
@@ -1199,43 +1366,28 @@ class VerilogIDE(QMainWindow):
         self.ai_input.setMinimumHeight(44)
         self.ai_input.setFont(QFont("Consolas", 10))
         self.ai_input.setPlaceholderText("Message AI…  (Ctrl+Enter to send)")
-        self.ai_input.setStyleSheet(
-            "QTextEdit{background:#3c3c3c;color:#d4d4d4;border:1px solid #555;"
-            "border-radius:4px;padding:4px 8px;font-family:Consolas;}"
-            "QTextEdit:focus{border:1px solid #4EC9B0;}"
-        )
         self.ai_input.installEventFilter(self)
         input_bar_lay.addWidget(self.ai_input)
 
         btn_col = QVBoxLayout()
         btn_col.setSpacing(4)
-        self.ai_send_btn = QPushButton("➤")
-        self.ai_send_btn.setFixedSize(38, 34)
-        self.ai_send_btn.setFont(QFont("Segoe UI", 13))
-        self.ai_send_btn.setToolTip("Send (Ctrl+Enter)")
-        self.ai_send_btn.setStyleSheet(
-            "QPushButton{background:#0e639c;color:#fff;border:none;border-radius:4px;}"
-            "QPushButton:hover{background:#1177bb;}"
-            "QPushButton:disabled{background:#3c3c3c;color:#666;}"
-        )
+        self.ai_send_btn = QPushButton("📨 Send")
+        self.ai_send_btn.setFixedSize(70, 34)
+        self.ai_send_btn.setFont(QFont("Segoe UI", 9))
+        self.ai_send_btn.setToolTip("Send message (Ctrl+Enter)")
         self.ai_send_btn.clicked.connect(self.ask_ai)
 
-        self.ai_stop_btn = QPushButton("⏹")
-        self.ai_stop_btn.setFixedSize(38, 34)
-        self.ai_stop_btn.setFont(QFont("Segoe UI", 11))
-        self.ai_stop_btn.setToolTip("Stop generation")
-        self.ai_stop_btn.setStyleSheet(
-            "QPushButton{background:#5c2020;color:#fff;border:none;border-radius:4px;}"
-            "QPushButton:hover{background:#7a2a2a;}"
-            "QPushButton:disabled{background:#3c3c3c;color:#666;}"
-        )
+        self.ai_stop_btn = QPushButton("⏹ Stop")
+        self.ai_stop_btn.setFixedSize(70, 34)
+        self.ai_stop_btn.setFont(QFont("Segoe UI", 9))
+        self.ai_stop_btn.setToolTip("Stop AI generation")
         self.ai_stop_btn.clicked.connect(self.stop_ai)
         self.ai_stop_btn.setEnabled(False)
 
         btn_col.addWidget(self.ai_send_btn)
         btn_col.addWidget(self.ai_stop_btn)
         input_bar_lay.addLayout(btn_col)
-        ai_layout.addWidget(input_bar)
+        ai_layout.addWidget(self._ai_input_bar)
 
         self.ai_dock.setWidget(ai_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
@@ -1339,6 +1491,7 @@ class VerilogIDE(QMainWindow):
         """
         import datetime
         ts = datetime.datetime.now().strftime("%H:%M")
+        is_light = getattr(self, '_ai_theme_name', 'light') == 'light'
 
         bubble = QWidget()
         b_lay = QVBoxLayout(bubble)
@@ -1346,32 +1499,37 @@ class VerilogIDE(QMainWindow):
         b_lay.setSpacing(2)
 
         if role == "user":
-            bubble_color = "#1a3a5c"
-            border_color = "#0e639c"
-            label_text  = "You"
-            label_color = "#4EC9B0"
+            bubble_color = "#dbeafe" if is_light else "#1a3a5c"
+            border_color = "#1565c0" if is_light else "#0e639c"
+            text_color   = "#0d2a5e" if is_light else "#d4d4d4"
+            label_text   = "You"
+            label_color  = "#0d47a1" if is_light else "#4EC9B0"
             align = Qt.AlignmentFlag.AlignRight
         elif role == "assistant":
-            bubble_color = "#252526"
-            border_color = "#3a3a3a"
-            label_text  = f"AI ({self.ai_model_combo.currentText()})"
-            label_color = "#9CDCFE"
+            bubble_color = "#f0f4fb" if is_light else "#252526"
+            border_color = "#b0c4de" if is_light else "#3a3a3a"
+            text_color   = "#1a1a2e" if is_light else "#d4d4d4"
+            label_text   = f"AI ({self.ai_model_combo.currentText()})"
+            label_color  = "#1565c0" if is_light else "#9CDCFE"
             align = Qt.AlignmentFlag.AlignLeft
         elif role == "error":
-            bubble_color = "#3a1010"
-            border_color = "#F44747"
-            label_text  = "Error"
-            label_color = "#F44747"
+            bubble_color = "#fdecea" if is_light else "#3a1010"
+            border_color = "#e53935" if is_light else "#F44747"
+            text_color   = "#8b0000" if is_light else "#d4d4d4"
+            label_text   = "Error"
+            label_color  = "#c62828" if is_light else "#F44747"
             align = Qt.AlignmentFlag.AlignLeft
         else:  # system
-            bubble_color = "#2d2d00"
-            border_color = "#888800"
-            label_text  = "System"
-            label_color = "#DCDCAA"
+            bubble_color = "#fffde7" if is_light else "#2d2d00"
+            border_color = "#f9a825" if is_light else "#888800"
+            text_color   = "#4e3a00" if is_light else "#d4d4d4"
+            label_text   = "System"
+            label_color  = "#e65100" if is_light else "#DCDCAA"
             align = Qt.AlignmentFlag.AlignLeft
 
         # Header row: role label + timestamp
-        hdr = QLabel(f"<b>{label_text}</b>  <span style='color:#666;font-size:9px;'>{ts}</span>")
+        ts_color = "#546e7a" if is_light else "#666666"
+        hdr = QLabel(f"<b>{label_text}</b>  <span style='color:{ts_color};font-size:9px;'>{ts}</span>")
         hdr.setStyleSheet(f"color:{label_color}; font-size:10px; padding:0;")
         b_lay.addWidget(hdr, alignment=align)
 
@@ -1380,12 +1538,12 @@ class VerilogIDE(QMainWindow):
         msg_lbl.setReadOnly(True)
         msg_lbl.setFont(QFont("Consolas", 10))
         msg_lbl.setStyleSheet(
-            f"QTextEdit{{background:{bubble_color}; color:#d4d4d4;"
+            f"QTextEdit{{background:{bubble_color}; color:{text_color};"
             f"border:1px solid {border_color}; border-radius:6px;"
             f"padding:8px 10px; font-family:Consolas;}}"
         )
         # Format code blocks
-        formatted = self._format_bubble_text(text)
+        formatted = self._format_bubble_text(text, is_light=is_light)
         msg_lbl.setHtml(formatted)
         # Auto-height
         msg_lbl.document().setTextWidth(msg_lbl.viewport().width())
@@ -1404,28 +1562,30 @@ class VerilogIDE(QMainWindow):
         vsb.setValue(vsb.maximum())
 
     @staticmethod
-    def _format_bubble_text(text: str) -> str:
+    def _format_bubble_text(text: str, is_light: bool = False) -> str:
         """Convert markdown-ish code fences to colored HTML for the bubble."""
         import re as _re
-        # Escape HTML first
         escaped = html.escape(text)
-        # Replace ```lang\n...\n``` with styled pre block
+        # Code block colors
+        code_bg  = "#f4f4f4" if is_light else "#1e1e1e"
+        code_fg  = "#8b4513" if is_light else "#CE9178"
+        code_bdr = "#c0c0c0" if is_light else "#555555"
+        ic_bg    = "#ebebeb" if is_light else "#3c3c3c"
+        ic_fg    = "#8b4513" if is_light else "#CE9178"
+
         def replace_fence(m):
-            code = m.group(2)
-            return (f"<pre style='background:#1e1e1e;color:#CE9178;"
-                    f"border:1px solid #555;border-radius:4px;"
+            code = m.group(2) or m.group(1) or ""
+            return (f"<pre style='background:{code_bg};color:{code_fg};"
+                    f"border:1px solid {code_bdr};border-radius:4px;"
                     f"padding:8px;margin:4px 0;white-space:pre-wrap;'>"
                     f"{code}</pre>")
         result = _re.sub(r'```[a-zA-Z]*\n(.*?)```|```(.*?)```',
                          replace_fence, escaped, flags=_re.DOTALL)
-        # Inline code `...`
         result = _re.sub(r'`([^`]+)`',
-                         r"<code style='background:#3c3c3c;color:#CE9178;"
+                         rf"<code style='background:{ic_bg};color:{ic_fg};"
                          r"border-radius:3px;padding:1px 4px;'>\1</code>",
                          result)
-        # Bold **...**
         result = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', result)
-        # Newlines
         result = result.replace('\n', '<br>')
         return result
 
@@ -1921,6 +2081,34 @@ class VerilogIDE(QMainWindow):
         self.vio_dock.raise_()
         self.console_output.appendPlainText(f"Gate Viewer: Drew diagram for '{module_name}'")
 
+    # ── Console → AI helper ─────────────────────────────────────────────────
+    def _insert_console_to_ai(self):
+        """Insert the full Debug Console text into the AI chat input (not sent)."""
+        text = self.console_output.toPlainText().strip()
+        if not text:
+            return
+
+        # Build a contextual prompt snippet
+        snippet = (
+            f"Here is the Debug Console output from the simulation:\n\n"
+            f"```\n{text}\n```\n\n"
+        )
+
+        # Append to whatever is already in the AI input box
+        current = self.ai_input.toPlainText()
+        if current.strip():
+            self.ai_input.setPlainText(current + "\n\n" + snippet)
+        else:
+            self.ai_input.setPlainText(snippet)
+
+        # Place cursor at the end so user can add more context
+        cursor = self.ai_input.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.ai_input.setTextCursor(cursor)
+
+        # Raise the AI dock and focus the input
+        self.ai_dock.raise_()
+        self.ai_input.setFocus()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
