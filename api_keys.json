@@ -1,0 +1,18 @@
+{
+  "keys": [
+    {
+      "name": "Ollama Cloud (default)",
+      "provider": "Ollama",
+      "base_url": "https://ollama.com",
+      "key": "949a3f58fcfb475ebd95be644b8aa7b1.Wex8pxkLXUrUGqQKBPWDSEyD",
+      "model": "llama3.2"
+    },
+    {
+      "name": "gemini",
+      "provider": "Ollama",
+      "base_url": "https://ollama.com",
+      "key": "fdghjk",
+      "model": ""
+    }
+  ]
+}

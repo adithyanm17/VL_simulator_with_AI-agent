@@ -254,16 +254,62 @@ from vio_dashboard import VIODashboard
 
 
 class TerminalWidget(QWidget):
-    """A VS Code-style integrated terminal powered by QProcess."""
+    """A VS Code-style integrated terminal.
+    
+    Each command is run as a fresh subprocess (cmd /c or powershell -Command)
+    so output is always captured and displayed reliably on Windows.
+    The current working directory is tracked locally and updated by `cd` commands.
+    """
+
+    # Theme palette (can be overridden by apply_theme)
+    DARK = {
+        "bar_bg": "#252526",
+        "bar_border": "#333333",
+        "output_bg": "#1e1e1e",
+        "output_fg": "#d4d4d4",
+        "input_bg": "#252526",
+        "input_fg": "#d4d4d4",
+        "input_border": "#3a3a3a",
+        "input_focus": "#4EC9B0",
+        "prompt_color": "#4EC9B0",
+        "btn_bg": "#3a3a3a",
+        "btn_fg": "#cccccc",
+        "btn_border": "#555555",
+        "btn_hover": "#505050",
+        "label_fg": "#9CDCFE",
+        "cwd_fg": "#888888",
+        "prompt_text_color": "#4EC9B0",
+        "error_color": "#F44747",
+    }
+    LIGHT = {
+        "bar_bg": "#f3f3f3",
+        "bar_border": "#d1d9e6",
+        "output_bg": "#ffffff",
+        "output_fg": "#1e1e1e",
+        "input_bg": "#f8f8f8",
+        "input_fg": "#1e1e1e",
+        "input_border": "#c8c8c8",
+        "input_focus": "#007acc",
+        "prompt_color": "#007acc",
+        "btn_bg": "#e8e8e8",
+        "btn_fg": "#333333",
+        "btn_border": "#c0c0c0",
+        "btn_hover": "#d0d0d0",
+        "label_fg": "#005a9e",
+        "cwd_fg": "#555555",
+        "prompt_text_color": "#007acc",
+        "error_color": "#cc0000",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._history: list[str] = []
         self._hist_idx: int = -1
-        self._process: QProcess | None = None
+        self._running_proc: QProcess | None = None   # currently executing command
         self._cwd: str = os.getcwd()
+        self._colors = dict(self.DARK)
         self._setup_ui()
-        self._start_shell()
+        self._print_banner()
 
     # ── UI ──────────────────────────────────────────────────────────
     def _setup_ui(self):
@@ -276,52 +322,36 @@ class TerminalWidget(QWidget):
         bar.setContentsMargins(6, 4, 6, 4)
 
         self._shell_label = QLabel()
-        self._shell_label.setStyleSheet("color:#9CDCFE; font-weight:bold; font-family:Consolas;")
 
         self._cwd_label = QLabel()
-        self._cwd_label.setStyleSheet("color:#888; font-family:Consolas; font-size:10px;")
         self._cwd_label.setWordWrap(False)
+        self._cwd_label.setText(self._cwd)
 
-        clear_btn = QPushButton("Clear")
-        clear_btn.setFixedWidth(60)
-        clear_btn.setStyleSheet(
-            "QPushButton{background:#3a3a3a;color:#ccc;border:1px solid #555;"
-            "border-radius:3px;padding:2px 6px;}"
-            "QPushButton:hover{background:#505050;}"
-        )
-        clear_btn.clicked.connect(self._clear_output)
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.setFixedWidth(60)
+        self._clear_btn.clicked.connect(self._clear_output)
 
-        new_btn = QPushButton("+ New")
-        new_btn.setFixedWidth(60)
-        new_btn.setStyleSheet(
-            "QPushButton{background:#3a3a3a;color:#ccc;border:1px solid #555;"
-            "border-radius:3px;padding:2px 6px;}"
-            "QPushButton:hover{background:#505050;}"
-        )
-        new_btn.clicked.connect(self._restart_shell)
+        self._kill_btn = QPushButton("⏹ Kill")
+        self._kill_btn.setFixedWidth(64)
+        self._kill_btn.setToolTip("Kill the running command")
+        self._kill_btn.setEnabled(False)
+        self._kill_btn.clicked.connect(self._kill_process)
 
         bar.addWidget(self._shell_label)
         bar.addSpacing(10)
         bar.addWidget(self._cwd_label)
         bar.addStretch()
-        bar.addWidget(clear_btn)
-        bar.addWidget(new_btn)
+        bar.addWidget(self._kill_btn)
+        bar.addWidget(self._clear_btn)
 
-        bar_widget = QWidget()
-        bar_widget.setLayout(bar)
-        bar_widget.setStyleSheet("background:#252526; border-bottom:1px solid #333;")
-        root.addWidget(bar_widget)
+        self._bar_widget = QWidget()
+        self._bar_widget.setLayout(bar)
+        root.addWidget(self._bar_widget)
 
         # ── Output display ──────────────────────────────────────────
         self._output = QPlainTextEdit()
         self._output.setReadOnly(True)
         self._output.setFont(QFont("Consolas", 11))
-        self._output.setStyleSheet(
-            "QPlainTextEdit{"
-            "  background:#1e1e1e; color:#d4d4d4;"
-            "  border:none;"
-            "}"
-        )
         self._output.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         root.addWidget(self._output, stretch=1)
 
@@ -331,86 +361,137 @@ class TerminalWidget(QWidget):
         input_row.setSpacing(4)
 
         self._prompt_label = QLabel("❯")
-        self._prompt_label.setStyleSheet(
-            "color:#4EC9B0; font-family:Consolas; font-size:13px; font-weight:bold;"
-        )
+        self._prompt_label.setFont(QFont("Consolas", 13))
         input_row.addWidget(self._prompt_label)
 
         self._input = QLineEdit()
         self._input.setFont(QFont("Consolas", 11))
-        self._input.setStyleSheet(
-            "QLineEdit{"
-            "  background:#252526; color:#d4d4d4;"
-            "  border:1px solid #3a3a3a; border-radius:3px; padding:3px 6px;"
-            "}"
-            "QLineEdit:focus{border:1px solid #4EC9B0;}"
-        )
-        self._input.setPlaceholderText("Type a command and press Enter...")
+        self._input.setPlaceholderText("Type a command and press Enter…")
         self._input.returnPressed.connect(self._send_command)
         self._input.installEventFilter(self)
         input_row.addWidget(self._input)
 
-        input_widget = QWidget()
-        input_widget.setLayout(input_row)
-        input_widget.setStyleSheet("background:#1e1e1e;")
-        root.addWidget(input_widget)
+        self._input_widget = QWidget()
+        self._input_widget.setLayout(input_row)
+        root.addWidget(self._input_widget)
 
-    # ── Shell management ────────────────────────────────────────────
+        self._apply_palette()  # set colors for the first time
+
+    def _print_banner(self):
+        exe = self._shell_executable()
+        shell_name = "PowerShell" if "powershell" in exe.lower() else "CMD"
+        self._shell_label.setText(f"⚡ {shell_name}")
+        self._append_text(
+            f"[Terminal] {shell_name} — each command runs as a subprocess.\n"
+            f"  Working dir: {self._cwd}\n"
+            f"  Use 'cd <path>' to change directory.\n",
+            color="info"
+        )
+
+    # ── Theme ────────────────────────────────────────────────────────
+    def apply_theme(self, theme_name: str):
+        """Switch between 'light' and 'dark' terminal colour palette."""
+        self._colors = dict(self.LIGHT if theme_name == "light" else self.DARK)
+        self._apply_palette()
+
+    def _apply_palette(self):
+        c = self._colors
+        self._bar_widget.setStyleSheet(
+            f"background:{c['bar_bg']}; border-bottom:1px solid {c['bar_border']};"
+        )
+        self._shell_label.setStyleSheet(
+            f"color:{c['label_fg']}; font-weight:bold; font-family:Consolas;"
+        )
+        self._cwd_label.setStyleSheet(
+            f"color:{c['cwd_fg']}; font-family:Consolas; font-size:10px;"
+        )
+        btn_ss = (
+            f"QPushButton{{background:{c['btn_bg']};color:{c['btn_fg']};"
+            f"border:1px solid {c['btn_border']};border-radius:3px;padding:2px 6px;}}"
+            f"QPushButton:hover{{background:{c['btn_hover']};}}"
+        )
+        self._clear_btn.setStyleSheet(btn_ss)
+        self._kill_btn.setStyleSheet(btn_ss)
+        self._output.setStyleSheet(
+            f"QPlainTextEdit{{background:{c['output_bg']};color:{c['output_fg']};border:none;}}"
+        )
+        self._prompt_label.setStyleSheet(
+            f"color:{c['prompt_color']}; font-weight:bold;"
+        )
+        self._input.setStyleSheet(
+            f"QLineEdit{{background:{c['input_bg']};color:{c['input_fg']};"
+            f"border:1px solid {c['input_border']};border-radius:3px;padding:3px 6px;}}"
+            f"QLineEdit:focus{{border:1px solid {c['input_focus']};}}"
+        )
+        self._input_widget.setStyleSheet(f"background:{c['output_bg']};")
+
+    # ── Shell helpers ────────────────────────────────────────────────
     def _shell_executable(self) -> str:
         ps = shutil.which("powershell.exe") or shutil.which("powershell")
-        if ps:
-            return ps
-        return "cmd.exe"
+        return ps if ps else "cmd.exe"
 
-    def _shell_args(self, exe: str) -> list[str]:
-        if "powershell" in exe.lower():
-            # -NoLogo: suppress banner  -NoExit: stay alive  -Command: set cwd first
-            return ["-NoLogo", "-NoExit",
-                    "-Command", f"Set-Location -LiteralPath '{self._cwd}'"]
-        return []  # cmd.exe needs no extra args
-
-    def _start_shell(self):
+    def _build_args(self, cmd: str) -> tuple[str, list[str]]:
+        """Return (exe, args) to run `cmd` as a one-shot subprocess."""
         exe = self._shell_executable()
-        shell_name = "PowerShell" if "powershell" in exe.lower() else "cmd"
-        self._shell_label.setText(f"⚡ {shell_name}")
-        self._cwd_label.setText(self._cwd)
-
-        self._process = QProcess(self)
-        self._process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self._process.readyReadStandardOutput.connect(self._on_output)
-        self._process.finished.connect(self._on_finished)
-        self._process.setWorkingDirectory(self._cwd)
-        self._process.start(exe, self._shell_args(exe))
-
-        if not self._process.waitForStarted(3000):
-            self._append_text("[Terminal] Failed to start shell process.\n", error=True)
-
-    def _restart_shell(self):
-        if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
-            self._process.kill()
-            self._process.waitForFinished(500)
-        self._output.clear()
-        self._start_shell()
+        if "powershell" in exe.lower():
+            # Set-Location first so relative paths work, then run the command
+            ps_cmd = f"Set-Location -LiteralPath '{self._cwd}'; {cmd}"
+            return exe, ["-NoLogo", "-NonInteractive", "-Command", ps_cmd]
+        else:
+            return "cmd.exe", ["/c", f'cd /d "{self._cwd}" && {cmd}']
 
     # ── Commands ────────────────────────────────────────────────────
     def _send_command(self):
-        cmd = self._input.text()
-        if not cmd.strip():
+        cmd = self._input.text().strip()
+        if not cmd:
             return
 
-        # Echo the command in output like a real terminal
-        self._append_text(f"❯ {cmd}\n", prompt=True)
+        # Echo the typed command
+        self._append_text(f"❯ {cmd}\n", color="prompt")
 
-        # Store history
+        # History
         if not self._history or self._history[-1] != cmd:
             self._history.append(cmd)
         self._hist_idx = -1
         self._input.clear()
+        self._input.setEnabled(False)
 
-        if self._process and self._process.state() == QProcess.ProcessState.Running:
-            self._process.write((cmd + "\n").encode("utf-8", errors="replace"))
+        # Handle built-in `cd` so the cwd persists for next commands
+        cd_match = re.match(r'^cd\s+(.+)$', cmd, re.IGNORECASE)
+        if cd_match:
+            target = cd_match.group(1).strip().strip('"').strip("'")
+            new_path = target if os.path.isabs(target) else os.path.join(self._cwd, target)
+            new_path = os.path.normpath(new_path)
+            if os.path.isdir(new_path):
+                self._cwd = new_path
+                self._cwd_label.setText(new_path)
+                self._append_text(f"Changed directory to: {new_path}\n", color="info")
+            else:
+                self._append_text(f"cd: No such directory: {new_path}\n", color="error")
+            self._input.setEnabled(True)
+            self._input.setFocus()
+            return
+
+        exe, args = self._build_args(cmd)
+        proc = QProcess(self)
+        proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        proc.readyReadStandardOutput.connect(lambda: self._on_proc_output(proc))
+        proc.finished.connect(lambda code, status: self._on_proc_finished(proc, code))
+        proc.setWorkingDirectory(self._cwd)
+        proc.start(exe, args)
+
+        if proc.waitForStarted(3000):
+            self._running_proc = proc
+            self._kill_btn.setEnabled(True)
         else:
-            self._append_text("[Terminal] Shell is not running. Click '+ New' to restart.\n", error=True)
+            self._append_text(f"[Terminal] Failed to start: {exe}\n", color="error")
+            self._input.setEnabled(True)
+            self._input.setFocus()
+
+    def _kill_process(self):
+        if self._running_proc and self._running_proc.state() != QProcess.ProcessState.NotRunning:
+            self._running_proc.kill()
+            self._append_text("[Terminal] Process killed.\n", color="error")
 
     def _clear_output(self):
         self._output.clear()
@@ -419,42 +500,47 @@ class TerminalWidget(QWidget):
     def set_cwd(self, path: str):
         self._cwd = path
         self._cwd_label.setText(path)
-        if self._process and self._process.state() == QProcess.ProcessState.Running:
-            exe = self._shell_executable()
-            if "powershell" in exe.lower():
-                cd_cmd = f"Set-Location -LiteralPath '{path}'"
-            else:
-                cd_cmd = f'cd /d "{path}"'
-            self._process.write((cd_cmd + "\n").encode("utf-8", errors="replace"))
+        self._append_text(f"[Terminal] Working directory set to: {path}\n", color="info")
 
     # ── Output handling ─────────────────────────────────────────────
-    def _on_output(self):
-        raw: QByteArray = self._process.readAllStandardOutput()
+    def _on_proc_output(self, proc: QProcess):
+        raw: QByteArray = proc.readAllStandardOutput()
         try:
             text = raw.data().decode("utf-8", errors="replace")
         except Exception:
             text = str(raw.data())
-        # Strip basic ANSI escape codes
-        text = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', text)
+        # Strip ANSI escape codes
+        text = re.sub(r'\x1b\[[0-9;]*[mGKHFJK]', '', text)
+        # Also strip PowerShell's \r
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
         self._append_text(text)
 
-    def _on_finished(self, exit_code, exit_status):
-        self._append_text(f"\n[Terminal] Process exited (code {exit_code}). Click '+ New' to restart.\n",
-                          error=True)
-        self._prompt_label.setStyleSheet("color:#F44747; font-family:Consolas; font-size:13px; font-weight:bold;")
+    def _on_proc_finished(self, proc: QProcess, exit_code: int):
+        # Flush remaining output
+        self._on_proc_output(proc)
+        if exit_code != 0:
+            self._append_text(f"[Exit code: {exit_code}]\n", color="error")
+        self._running_proc = None
+        self._kill_btn.setEnabled(False)
+        self._input.setEnabled(True)
+        self._input.setFocus()
 
-    def _append_text(self, text: str, error: bool = False, prompt: bool = False):
+    def _append_text(self, text: str, color: str = "normal"):
+        """color: 'normal' | 'prompt' | 'error' | 'info'"""
         cursor = self._output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
-
         fmt = self._output.currentCharFormat()
-        if prompt:
-            fmt.setForeground(QColor("#4EC9B0"))
-        elif error:
-            fmt.setForeground(QColor("#F44747"))
+        c = self._colors
+        if color == "prompt":
+            fmt.setForeground(QColor(c["prompt_text_color"]))
+        elif color == "error":
+            fmt.setForeground(QColor(c["error_color"]))
+        elif color == "info":
+            fg = QColor(c["output_fg"])
+            fg.setAlpha(160)
+            fmt.setForeground(fg)
         else:
-            fmt.setForeground(QColor("#d4d4d4"))
-
+            fmt.setForeground(QColor(c["output_fg"]))
         cursor.setCharFormat(fmt)
         cursor.insertText(text)
         self._output.setTextCursor(cursor)
@@ -463,7 +549,6 @@ class TerminalWidget(QWidget):
     # ── Arrow-key history navigation ────────────────────────────────
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
-        from PyQt6.QtGui import QKeyEvent
         if obj is self._input and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             if key == Qt.Key.Key_Up:
@@ -814,6 +899,11 @@ class VerilogIDE(QMainWindow):
         if theme_name in self.themes:
             stylesheet = self.themes[theme_name].get("stylesheet", "")
             self.setStyleSheet(stylesheet)
+        # Propagate theme to terminal and VIO board
+        if hasattr(self, 'terminal_widget'):
+            self.terminal_widget.apply_theme(theme_name)
+        if hasattr(self, 'vio_dashboard'):
+            self.vio_dashboard.apply_theme(theme_name)
             
     def setup_ui(self):
         # Menu Bar

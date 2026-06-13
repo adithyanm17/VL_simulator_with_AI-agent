@@ -19,7 +19,7 @@ from PyQt6.QtCore import Qt, QRect, QRectF, QPointF, QSize, QTimer
 # ─────────────────────────────────────────────────────────────────────────────
 #  Gate data model
 # ─────────────────────────────────────────────────────────────────────────────
-GATE_COLORS = {
+GATE_COLORS_DARK = {
     "AND":  ("#1a3a6a", "#4a9eff", "#a0cfff"),
     "NAND": ("#3a1a1a", "#ff6a6a", "#ffaaaa"),
     "OR":   ("#1a3a1a", "#4aff6a", "#a0ffb0"),
@@ -30,6 +30,21 @@ GATE_COLORS = {
     "BUF":  ("#1a1a1a", "#aaaaaa", "#dddddd"),
     "WIRE": ("#0a1a0a", "#44aa44", "#88dd88"),
 }
+
+GATE_COLORS_LIGHT = {
+    "AND":  ("#ddeeff", "#1565c0", "#003580"),
+    "NAND": ("#ffeaea", "#c62828", "#7a0000"),
+    "OR":   ("#eaffea", "#2e7d32", "#005005"),
+    "NOR":  ("#f3eaff", "#6a1b9a", "#38006b"),
+    "XOR":  ("#fffde7", "#f57f17", "#bc5100"),
+    "XNOR": ("#e0f7fa", "#00838f", "#005662"),
+    "NOT":  ("#fff3e0", "#e65100", "#8d1c00"),
+    "BUF":  ("#f5f5f5", "#616161", "#212121"),
+    "WIRE": ("#e8f5e9", "#388e3c", "#1b5e20"),
+}
+
+# Default to dark
+GATE_COLORS = GATE_COLORS_DARK
 
 class GateNode:
     """Represents one logic gate extracted from Verilog."""
@@ -175,10 +190,15 @@ MARGIN = 60
 class GateCanvas(QWidget):
     """Renders a list of GateNode as a schematic."""
 
-    def __init__(self, gates, parent=None):
+    BG_DARK  = "#0b0f14"
+    BG_LIGHT = "#f8fafc"
+
+    def __init__(self, gates, parent=None, theme="dark"):
         super().__init__(parent)
         self.gates = gates
-        self.setStyleSheet("background: #0b0f14;")
+        self._theme = theme
+        self._bg = self.BG_LIGHT if theme == "light" else self.BG_DARK
+        self.setStyleSheet(f"background: {self._bg};")
         self._layout_gates()
         self._compute_size()
         self.setMinimumSize(self._total_w, self._total_h)
@@ -233,10 +253,11 @@ class GateCanvas(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor("#0b0f14"))
+        p.fillRect(self.rect(), QColor(self._bg))
 
         if not self.gates:
-            p.setPen(QColor("#334455"))
+            no_gate_color = "#334455" if self._theme == "dark" else "#607d8b"
+            p.setPen(QColor(no_gate_color))
             p.setFont(QFont("Segoe UI", 13))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                        "No logic gates detected in the Verilog code.\n\n"
@@ -245,7 +266,8 @@ class GateCanvas(QWidget):
             return
 
         # Draw grid dots
-        p.setPen(QPen(QColor("#151c24"), 1))
+        dot_color = "#151c24" if self._theme == "dark" else "#dde4ec"
+        p.setPen(QPen(QColor(dot_color), 1))
         for gx in range(0, self._total_w, 30):
             for gy in range(0, self._total_h, 30):
                 p.drawPoint(gx, gy)
@@ -309,7 +331,8 @@ class GateCanvas(QWidget):
 
     def _draw_gate(self, p: QPainter, g: GateNode):
         gtype = g.gate_type
-        bg_dark, accent, label_color = GATE_COLORS.get(gtype, ("#1a1a2a", "#6688cc", "#aabbdd"))
+        palette = GATE_COLORS_LIGHT if self._theme == "light" else GATE_COLORS_DARK
+        bg_dark, accent, label_color = palette.get(gtype, ("#1a1a2a", "#6688cc", "#aabbdd"))
 
         x, y, w, h = g.x, g.y, g.w, g.h
 
@@ -354,7 +377,7 @@ class GateCanvas(QWidget):
         # ── Bubble for inverting gates ─────────────────────────────────
         if gtype in ("NOT", "NAND", "NOR", "XNOR", "BUF"):
             bx, by = self._output_pin_pos(g)
-            p.setBrush(QColor("#0b0f14"))
+            p.setBrush(QColor(self._bg))
             p.setPen(QPen(QColor(accent), 2))
             p.drawEllipse(int(bx) - 7, int(by) - 5, 10, 10)
 
@@ -431,6 +454,7 @@ class VIODashboard(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._gates = []
+        self._theme = "dark"
         self._build_ui()
 
     # ── UI construction ──────────────────────────────────────────────────
@@ -440,92 +464,71 @@ class VIODashboard(QWidget):
         root.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setFixedHeight(44)
-        header.setStyleSheet(
-            "background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            "stop:0 #0d1b2a, stop:1 #12294a);"
-            "border-bottom: 2px solid #1e88e5;"
-        )
-        hl = QHBoxLayout(header)
+        self._header = QFrame()
+        self._header.setFixedHeight(44)
+        hl = QHBoxLayout(self._header)
         hl.setContentsMargins(12, 0, 12, 0)
 
-        icon = QLabel("⬡")
-        icon.setFont(QFont("Segoe UI Emoji", 18))
-        icon.setStyleSheet("color: #4fc3f7;")
-        hl.addWidget(icon)
+        self._icon_lbl = QLabel("⬡")
+        self._icon_lbl.setFont(QFont("Segoe UI Emoji", 18))
+        hl.addWidget(self._icon_lbl)
 
-        title = QLabel("Logic Gate Diagram Viewer")
-        title.setStyleSheet(
-            "color: #4fc3f7; font-family: 'Segoe UI'; "
-            "font-size: 13px; font-weight: bold; padding-left: 6px;"
+        self._title_lbl = QLabel("Logic Gate Diagram Viewer")
+        self._title_lbl.setStyleSheet(
+            "font-family: 'Segoe UI'; font-size: 13px; font-weight: bold; padding-left: 6px;"
         )
-        hl.addWidget(title)
+        hl.addWidget(self._title_lbl)
         hl.addStretch()
 
         self.gate_count_lbl = QLabel("")
-        self.gate_count_lbl.setStyleSheet(
-            "color: #546e7a; font-family: Consolas; font-size: 10px;"
-        )
         hl.addWidget(self.gate_count_lbl)
 
-        root.addWidget(header)
+        root.addWidget(self._header)
 
         # Toolbar
-        toolbar = QFrame()
-        toolbar.setFixedHeight(38)
-        toolbar.setStyleSheet("background: #0a131d; border-bottom: 1px solid #162030;")
-        tb = QHBoxLayout(toolbar)
+        self._toolbar = QFrame()
+        self._toolbar.setFixedHeight(38)
+        tb = QHBoxLayout(self._toolbar)
         tb.setContentsMargins(8, 4, 8, 4)
         tb.setSpacing(8)
 
         self.parse_btn = QPushButton("⟳  Parse & Draw")
-        self.parse_btn.setStyleSheet(self._btn("#1565c0", "#1976d2"))
         self.parse_btn.setToolTip("Parse the active Verilog file and draw gate diagram")
         tb.addWidget(self.parse_btn)
 
         # Zoom controls
         tb.addWidget(QLabel(" "))
-        zoom_lbl = QLabel("Zoom:")
-        zoom_lbl.setStyleSheet("color: #546e7a; font-family: 'Segoe UI'; font-size: 10px;")
-        tb.addWidget(zoom_lbl)
+        self._zoom_lbl = QLabel("Zoom:")
+        self._zoom_lbl.setStyleSheet("font-family: 'Segoe UI'; font-size: 10px;")
+        tb.addWidget(self._zoom_lbl)
 
         self.zoom_combo = QComboBox()
         self.zoom_combo.addItems(["50%", "75%", "100%", "125%", "150%", "200%"])
         self.zoom_combo.setCurrentText("100%")
         self.zoom_combo.setFixedWidth(70)
-        self.zoom_combo.setStyleSheet(
-            "QComboBox { background: #0d1f33; color: #90caf9; border: 1px solid #1e4a8a; "
-            "border-radius: 4px; font-family: Consolas; font-size: 10px; padding: 2px 4px; }"
-            "QComboBox::drop-down { border: none; }"
-            "QComboBox QAbstractItemView { background: #0d1f33; color: #90caf9; }"
-        )
         self.zoom_combo.currentTextChanged.connect(self._on_zoom_changed)
         tb.addWidget(self.zoom_combo)
 
         tb.addStretch()
 
-        # Legend
-        for gtype, (_, accent, _) in list(GATE_COLORS.items())[:6]:
+        # Legend dots (stored so we can recolor on theme change)
+        self._legend_dots  = []
+        self._legend_lbls  = []
+        for gtype, (_, accent_d, _) in list(GATE_COLORS_DARK.items())[:6]:
             dot = QLabel("●")
-            dot.setStyleSheet(f"color: {accent}; font-size: 10px;")
+            dot.setStyleSheet(f"color: {accent_d}; font-size: 10px;")
             lbl = QLabel(gtype)
-            lbl.setStyleSheet("color: #546e7a; font-family: Consolas; font-size: 9px; margin-right: 6px;")
+            lbl.setStyleSheet("font-family: Consolas; font-size: 9px; margin-right: 6px;")
             tb.addWidget(dot)
             tb.addWidget(lbl)
+            self._legend_dots.append((gtype, dot))
+            self._legend_lbls.append(lbl)
 
-        root.addWidget(toolbar)
+        root.addWidget(self._toolbar)
 
         # Scroll canvas area
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
-        self.scroll.setStyleSheet(
-            "QScrollArea { background: #0b0f14; border: none; }"
-            "QScrollBar:vertical   { background: #0b0f14; width: 10px; }"
-            "QScrollBar::handle:vertical { background: #1e3a5c; border-radius: 5px; }"
-            "QScrollBar:horizontal { background: #0b0f14; height: 10px; }"
-            "QScrollBar::handle:horizontal { background: #1e3a5c; border-radius: 5px; }"
-        )
 
         # Initial placeholder
         self._canvas = self._make_placeholder()
@@ -534,10 +537,15 @@ class VIODashboard(QWidget):
 
         self._zoom = 1.0
 
+        # Apply the default (dark) theme styling now that all widgets exist
+        self._apply_vio_palette()
+
     # ── placeholder canvas ────────────────────────────────────────────────
     def _make_placeholder(self):
+        bg  = "#f8fafc" if self._theme == "light" else "#0b0f14"
+        fg  = "#607d8b" if self._theme == "light" else "#263545"
         w = QWidget()
-        w.setStyleSheet("background: #0b0f14;")
+        w.setStyleSheet(f"background: {bg};")
         w.setMinimumSize(600, 300)
         lyt = QVBoxLayout(w)
         lbl = QLabel(
@@ -547,12 +555,115 @@ class VIODashboard(QWidget):
         )
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet(
-            "color: #263545; font-family: 'Segoe UI'; font-size: 13px; padding: 60px;"
+            f"color: {fg}; font-family: 'Segoe UI'; font-size: 13px; padding: 60px;"
         )
         lyt.addWidget(lbl)
         return w
 
     # ── public API ─────────────────────────────────────────────────────────
+    def apply_theme(self, theme_name: str):
+        """Called by the IDE when the user switches themes."""
+        self._theme = "light" if theme_name == "light" else "dark"
+        self._apply_vio_palette()
+        # Redraw the canvas with the new theme
+        if self._gates:
+            self._redraw()
+        else:
+            try:
+                old = self._canvas
+                self._canvas = self._make_placeholder()
+                self.scroll.setWidget(self._canvas)
+                if old is not None and old is not self._canvas:
+                    old.hide()
+                    old.setParent(None)
+            except RuntimeError:
+                self._canvas = self._make_placeholder()
+                self.scroll.setWidget(self._canvas)
+
+    def _apply_vio_palette(self):
+        """Apply header / toolbar / scroll stylesheet for current theme."""
+        is_light = self._theme == "light"
+
+        # Header
+        if is_light:
+            hdr_ss = (
+                "background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                "stop:0 #e3f0ff, stop:1 #dbeeff);"
+                "border-bottom: 2px solid #1565c0;"
+            )
+            icon_color  = "#1565c0"
+            title_color = "#0d47a1"
+            count_color = "#546e7a"
+        else:
+            hdr_ss = (
+                "background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                "stop:0 #0d1b2a, stop:1 #12294a);"
+                "border-bottom: 2px solid #1e88e5;"
+            )
+            icon_color  = "#4fc3f7"
+            title_color = "#4fc3f7"
+            count_color = "#546e7a"
+
+        self._header.setStyleSheet(hdr_ss)
+        self._icon_lbl.setStyleSheet(f"color: {icon_color};")
+        self._title_lbl.setStyleSheet(
+            f"color: {title_color}; font-family: 'Segoe UI'; "
+            f"font-size: 13px; font-weight: bold; padding-left: 6px;"
+        )
+        self.gate_count_lbl.setStyleSheet(
+            f"color: {count_color}; font-family: Consolas; font-size: 10px;"
+        )
+
+        # Toolbar
+        if is_light:
+            tb_ss = "background: #f0f4f8; border-bottom: 1px solid #d1d9e6;"
+            btn_bg, btn_hov = "#1565c0", "#1976d2"
+            zoom_ss = (
+                "QComboBox { background: #ffffff; color: #1565c0; border: 1px solid #90caf9; "
+                "border-radius: 4px; font-family: Consolas; font-size: 10px; padding: 2px 4px; }"
+                "QComboBox::drop-down { border: none; }"
+                "QComboBox QAbstractItemView { background: #ffffff; color: #1565c0; }"
+            )
+            legend_label_color = "#455a64"
+        else:
+            tb_ss = "background: #0a131d; border-bottom: 1px solid #162030;"
+            btn_bg, btn_hov = "#1565c0", "#1976d2"
+            zoom_ss = (
+                "QComboBox { background: #0d1f33; color: #90caf9; border: 1px solid #1e4a8a; "
+                "border-radius: 4px; font-family: Consolas; font-size: 10px; padding: 2px 4px; }"
+                "QComboBox::drop-down { border: none; }"
+                "QComboBox QAbstractItemView { background: #0d1f33; color: #90caf9; }"
+            )
+            legend_label_color = "#546e7a"
+
+        self._toolbar.setStyleSheet(tb_ss)
+        self.parse_btn.setStyleSheet(self._btn(btn_bg, btn_hov))
+        self.zoom_combo.setStyleSheet(zoom_ss)
+        self._zoom_lbl.setStyleSheet(f"color: {legend_label_color}; font-family: 'Segoe UI'; font-size: 10px;")
+
+        # Legend dot colors
+        palette = GATE_COLORS_LIGHT if is_light else GATE_COLORS_DARK
+        for gtype, dot in self._legend_dots:
+            _, accent, _ = palette.get(gtype, ("#000", "#666", "#aaa"))
+            dot.setStyleSheet(f"color: {accent}; font-size: 10px;")
+        for lbl in self._legend_lbls:
+            lbl.setStyleSheet(f"color: {legend_label_color}; font-family: Consolas; font-size: 9px; margin-right: 6px;")
+
+        # Scroll area
+        if is_light:
+            scroll_bg = "#f8fafc"
+            scroll_handle = "#b0bec5"
+        else:
+            scroll_bg = "#0b0f14"
+            scroll_handle = "#1e3a5c"
+        self.scroll.setStyleSheet(
+            f"QScrollArea {{ background: {scroll_bg}; border: none; }}"
+            f"QScrollBar:vertical   {{ background: {scroll_bg}; width: 10px; }}"
+            f"QScrollBar::handle:vertical {{ background: {scroll_handle}; border-radius: 5px; }}"
+            f"QScrollBar:horizontal {{ background: {scroll_bg}; height: 10px; }}"
+            f"QScrollBar::handle:horizontal {{ background: {scroll_handle}; border-radius: 5px; }}"
+        )
+
     def load_module(self, verilog_code: str, module_name: str = ""):
         parser = VerilogGateParser()
         gates = parser.parse(verilog_code)
@@ -561,10 +672,10 @@ class VIODashboard(QWidget):
 
     def _redraw(self, module_name=""):
         if self._gates:
-            canvas = GateCanvas(self._gates)
+            canvas = GateCanvas(self._gates, theme=self._theme)
             self._apply_zoom(canvas)
         else:
-            canvas = GateCanvas([])   # shows "no gates" message
+            canvas = GateCanvas([], theme=self._theme)   # shows "no gates" message
 
         self._canvas = canvas
         self.scroll.setWidget(canvas)
