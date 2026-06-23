@@ -1392,7 +1392,6 @@ class VerilogIDE(QMainWindow):
         self.windows_menu.addAction(self.ai_dock.toggleViewAction())
         self.windows_menu.addAction(self.terminal_dock.toggleViewAction())
 
-        self.new_file() # Start with an empty file
         
         # Try to load available models
         self.refresh_ollama_models()
@@ -1721,6 +1720,8 @@ class VerilogIDE(QMainWindow):
             self.set_project_dir(dir_path)
             
     def set_project_dir(self, dir_path):
+        if hasattr(self, 'current_project_dir') and self.current_project_dir:
+            self.save_open_files()
         self.current_project_dir = dir_path
         self.tree_view.setRootIndex(self.file_system_model.index(dir_path))
         self.console_output.appendPlainText(f"Opened project: {dir_path}")
@@ -1728,7 +1729,34 @@ class VerilogIDE(QMainWindow):
         self.load_ai_memory()
         if hasattr(self, 'terminal_widget'):
             self.terminal_widget.set_cwd(dir_path)
-        
+        self.editor_tabs.clear()
+        self.editor_tabs_right.clear()
+        config = {}
+        if hasattr(self, 'config_path') and __import__('os').path.exists(self.config_path):
+            try:
+                with open(self.config_path, "r") as f:
+                    config = __import__('json').load(f)
+            except: pass
+        key = "open_files_" + dir_path
+        for fp in config.get(key, []):
+            if __import__('os').path.exists(fp):
+                self.open_file(fp)
+
+    def save_open_files(self):
+        if not hasattr(self, 'current_project_dir') or not self.current_project_dir: return
+        open_files = []
+        for tabs in [self.editor_tabs, self.editor_tabs_right]:
+            for i in range(tabs.count()):
+                editor = tabs.widget(i)
+                fp = editor.property("file_path")
+                if fp:
+                    open_files.append(fp)
+        key = "open_files_" + self.current_project_dir
+        self.save_config(key, open_files)
+
+    def closeEvent(self, event):
+        self.save_open_files()
+        super().closeEvent(event)
     def load_ai_memory(self):
         self.chat_history = []
         # Clear chat bubbles (keep trailing stretch)
