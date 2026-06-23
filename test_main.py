@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from PyQt6.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication
 import main  # Import main after adding to sys.path
 
 # Need a QApplication instance before creating QWidget subclasses

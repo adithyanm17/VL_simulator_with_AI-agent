@@ -5,15 +5,15 @@ visual schematic of AND, OR, NOT, XOR, NAND, NOR, XNOR gates with wires.
 No external hardware or ports needed — purely code-to-diagram.
 """
 import re
-from PyQt6.QtWidgets import (
+from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QSizePolicy, QApplication, QComboBox
 )
-from PyQt6.QtGui import (
+from PyQt5.QtGui import (
     QPainter, QColor, QPen, QFont, QBrush, QPainterPath,
     QLinearGradient, QFontMetrics
 )
-from PyQt6.QtCore import Qt, QRect, QRectF, QPointF, QSize, QTimer
+from PyQt5.QtCore import Qt, QRect, QRectF, QPointF, QSize, QTimer
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -252,14 +252,14 @@ class GateCanvas(QWidget):
     # ── Paint ─────────────────────────────────────────────────────────────
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor(self._bg))
 
         if not self.gates:
             no_gate_color = "#334455" if self._theme == "dark" else "#607d8b"
             p.setPen(QColor(no_gate_color))
             p.setFont(QFont("Segoe UI", 13))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+            p.drawText(self.rect(), Qt.AlignCenter,
                        "No logic gates detected in the Verilog code.\n\n"
                        "Make sure your file contains assign statements\n"
                        "or gate-level primitives (and, or, not, xor…)")
@@ -297,14 +297,14 @@ class GateCanvas(QWidget):
                     # Label the stub
                     stub_x = dst_x - 40
                     stub_y = dst_y
-                    pen = QPen(QColor("#667799"), 1.5, Qt.PenStyle.DashLine)
+                    pen = QPen(QColor("#667799"), 1.5, Qt.DashLine)
                     p.setPen(pen)
                     p.drawLine(int(stub_x), int(stub_y), int(dst_x), int(dst_y))
                     # Input label
                     p.setPen(QColor("#8899bb"))
                     p.setFont(QFont("Consolas", 8))
                     p.drawText(int(stub_x) - 55, int(stub_y) - 7, 52, 16,
-                               Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                               Qt.AlignRight | Qt.AlignVCenter,
                                inp_name)
                     continue
 
@@ -319,7 +319,7 @@ class GateCanvas(QWidget):
 
                 # Arrow tip at destination
                 p.setBrush(QColor("#2a6a44"))
-                p.setPen(Qt.PenStyle.NoPen)
+                p.setPen(Qt.NoPen)
                 aw = 6
                 tri = QPainterPath()
                 tri.moveTo(dst_x, dst_y)
@@ -327,7 +327,7 @@ class GateCanvas(QWidget):
                 tri.lineTo(dst_x - aw, dst_y + aw // 2)
                 tri.closeSubpath()
                 p.drawPath(tri)
-                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setBrush(Qt.NoBrush)
 
     def _draw_gate(self, p: QPainter, g: GateNode):
         gtype = g.gate_type
@@ -348,31 +348,31 @@ class GateCanvas(QWidget):
 
         # ── Gate type label ────────────────────────────────────────────
         p.setPen(QColor(label_color))
-        p.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        p.setFont(QFont("Consolas", 11, QFont.Bold))
         p.drawText(int(x), int(y), int(w), int(h),
-                   Qt.AlignmentFlag.AlignCenter, gtype)
+                   Qt.AlignCenter, gtype)
 
         # ── Output signal name (right side) ───────────────────────────
         out_x, out_y = self._output_pin_pos(g)
         p.setPen(QColor("#00cc88"))
         p.setFont(QFont("Consolas", 8))
         p.drawText(int(out_x + 6), int(out_y) - 7, 80, 14,
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   Qt.AlignLeft | Qt.AlignVCenter,
                    g.output)
 
         # ── Output pin dot ─────────────────────────────────────────────
         p.setBrush(QColor("#00cc88"))
-        p.setPen(Qt.PenStyle.NoPen)
+        p.setPen(Qt.NoPen)
         p.drawEllipse(int(out_x) - 4, int(out_y) - 4, 8, 8)
-        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setBrush(Qt.NoBrush)
 
         # ── Input pin dots ─────────────────────────────────────────────
         for i in range(len(g.inputs)):
             px, py = self._input_pin_pos(g, i)
             p.setBrush(QColor("#4499cc"))
-            p.setPen(Qt.PenStyle.NoPen)
+            p.setPen(Qt.NoPen)
             p.drawEllipse(int(px) - 3, int(py) - 3, 6, 6)
-            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setBrush(Qt.NoBrush)
 
         # ── Bubble for inverting gates ─────────────────────────────────
         if gtype in ("NOT", "NAND", "NOR", "XNOR", "BUF"):
@@ -553,7 +553,7 @@ class VIODashboard(QWidget):
             "then click  ⟳ Parse & Draw\n\n"
             "Supported: assign statements, and/or/not/xor/nand/nor primitives"
         )
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet(
             f"color: {fg}; font-family: 'Segoe UI'; font-size: 13px; padding: 60px;"
         )

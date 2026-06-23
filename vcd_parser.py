@@ -13,6 +13,7 @@ class VCDParser:
 
         current_time = 0
         header_done = False
+        current_scope = []
         
         for line in lines:
             line = line.strip()
@@ -20,13 +21,20 @@ class VCDParser:
                 continue
 
             if not header_done:
-                if line.startswith('$var'):
+                if line.startswith('$scope'):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        current_scope.append(parts[2])
+                elif line.startswith('$upscope'):
+                    if current_scope:
+                        current_scope.pop()
+                elif line.startswith('$var'):
                     parts = line.split()
                     var_type = parts[1]
                     size = int(parts[2])
                     var_id = parts[3]
                     name = parts[4]
-                    self.signals[var_id] = {'name': name, 'size': size, 'values': []}
+                    self.signals[var_id] = {'name': name, 'size': size, 'values': [], 'path': list(current_scope)}
                 elif line.startswith('$enddefinitions'):
                     header_done = True
             else:

@@ -7,7 +7,8 @@ import urllib.error
 import re
 import shutil
 from example_codes import EXAMPLES
-from PyQt6.QtWidgets import (
+from PyQt5.QtWidgets import (
+    QAction, QFileSystemModel,
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QPlainTextEdit, QFileDialog, QDockWidget, QListWidget,
     QTreeView, QMenu, QMenuBar, QToolBar, QTextEdit,
@@ -16,8 +17,8 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QLineEdit, QInputDialog, QScrollArea, QFrame, QSizePolicy
 )
 import html
-from PyQt6.QtGui import QAction, QKeySequence, QFont, QIcon, QColor, QPainter, QPen, QFileSystemModel, QTextFormat
-from PyQt6.QtCore import Qt, QDir, QSize, QRect, QThread, pyqtSignal, QProcess, QByteArray
+from PyQt5.QtGui import QKeySequence, QTextCursor, QFont, QIcon, QColor, QPainter, QPen, QTextFormat
+from PyQt5.QtCore import Qt, QDir, QSize, QRect, QThread, pyqtSignal, QProcess, QByteArray
 
 OLLAMA_CLOUD_API_KEY = "949a3f58fcfb475ebd95be644b8aa7b1.Wex8pxkLXUrUGqQKBPWDSEyD"
 OLLAMA_CLOUD_BASE_URL = "https://ollama.com"
@@ -77,7 +78,7 @@ class LineNumberArea(QWidget):
 class CodeEditor(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
         font = QFont("Consolas", 12)
         self.setFont(font)
         
@@ -124,7 +125,7 @@ class CodeEditor(QPlainTextEdit):
                 number = str(blockNumber + 1)
                 painter.setPen(QColor("#aaaaaa"))
                 painter.drawText(0, top, self.lineNumberArea.width() - 2, self.fontMetrics().height(),
-                                 Qt.AlignmentFlag.AlignRight, number)
+                                 Qt.AlignRight, number)
             block = block.next()
             top = bottom
             bottom = top + int(self.blockBoundingRect(block).height())
@@ -157,14 +158,11 @@ class NewProjectDialog(QDialog):
         loc_layout.addWidget(self.loc_input)
         loc_layout.addWidget(browse_btn)
         
-        self.vc_checkbox = QCheckBox("Enable Version Control (Track Changes)")
-        self.vc_checkbox.setChecked(True)
         
         self.layout.addRow("Project Name:", self.name_input)
         self.layout.addRow("Location:", loc_layout)
-        self.layout.addRow("", self.vc_checkbox)
         
-        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.layout.addRow(self.buttons)
@@ -174,7 +172,6 @@ class NewProjectDialog(QDialog):
         if dir_path:
             self.loc_input.setText(dir_path)
 
-class VersionHistoryDialog(QDialog):
     def __init__(self, proj_dir, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Change Tracker History")
@@ -240,8 +237,8 @@ class VersionHistoryDialog(QDialog):
         if row < 0 or row >= len(self.commits): return
         commit_hash = self.commits[row][0]
         
-        reply = QMessageBox.question(self, "Revert Project", f"Are you sure you want to revert the entire project to {commit_hash}? Uncommitted changes will be lost.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
+        reply = QMessageBox.question(self, "Revert Project", f"Are you sure you want to revert the entire project to {commit_hash}? Uncommitted changes will be lost.", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
             try:
                 subprocess.run(["git", "reset", "--hard", commit_hash], cwd=self.proj_dir, capture_output=True)
                 QMessageBox.information(self, "Reverted", "Project successfully reverted.\nPlease close and reopen your files to see the changes.")
@@ -352,7 +349,7 @@ class TerminalWidget(QWidget):
         self._output = QPlainTextEdit()
         self._output.setReadOnly(True)
         self._output.setFont(QFont("Consolas", 11))
-        self._output.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._output.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         root.addWidget(self._output, stretch=1)
 
         # ── Input row ───────────────────────────────────────────────
@@ -481,7 +478,7 @@ class TerminalWidget(QWidget):
 
         exe, args = self._build_args(cmd)
         proc = QProcess(self)
-        proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda: self._on_proc_output(proc))
         proc.finished.connect(lambda code, status: self._on_proc_finished(proc, code))
         proc.setWorkingDirectory(self._cwd)
@@ -496,7 +493,7 @@ class TerminalWidget(QWidget):
             self._input.setFocus()
 
     def _kill_process(self):
-        if self._running_proc and self._running_proc.state() != QProcess.ProcessState.NotRunning:
+        if self._running_proc and self._running_proc.state() != QProcess.NotRunning:
             self._running_proc.kill()
             self._append_text("[Terminal] Process killed.\n", color="error")
 
@@ -535,7 +532,7 @@ class TerminalWidget(QWidget):
     def _append_text(self, text: str, color: str = "normal"):
         """color: 'normal' | 'prompt' | 'error' | 'info'"""
         cursor = self._output.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.End)
         fmt = self._output.currentCharFormat()
         c = self._colors
         if color == "prompt":
@@ -555,10 +552,10 @@ class TerminalWidget(QWidget):
 
     # ── Arrow-key history navigation ────────────────────────────────
     def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-        if obj is self._input and event.type() == QEvent.Type.KeyPress:
+        from PyQt5.QtCore import QEvent
+        if obj is self._input and event.type() == QEvent.KeyPress:
             key = event.key()
-            if key == Qt.Key.Key_Up:
+            if key == Qt.Key_Up:
                 if self._history:
                     if self._hist_idx == -1:
                         self._hist_idx = len(self._history) - 1
@@ -566,7 +563,7 @@ class TerminalWidget(QWidget):
                         self._hist_idx -= 1
                     self._input.setText(self._history[self._hist_idx])
                 return True
-            elif key == Qt.Key.Key_Down:
+            elif key == Qt.Key_Down:
                 if self._hist_idx != -1:
                     self._hist_idx += 1
                     if self._hist_idx >= len(self._history):
@@ -678,7 +675,7 @@ class APIKeyManagerDialog(QDialog):
 
         # ── Divider ───────────────────────────────────────────────────────────
         div = QFrame()
-        div.setFrameShape(QFrame.Shape.VLine)
+        div.setFrameShape(QFrame.VLine)
         div.setStyleSheet("color:#3a3a3a;")
         root.addWidget(div)
 
@@ -694,7 +691,7 @@ class APIKeyManagerDialog(QDialog):
         right_lay.addWidget(form_lbl)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setLabelAlignment(Qt.AlignRight)
         form.setSpacing(8)
 
         label_style = "color:#cccccc; font-size:11px;"
@@ -730,7 +727,7 @@ class APIKeyManagerDialog(QDialog):
         # API Key
         key_row = QHBoxLayout()
         self._key_edit = QLineEdit()
-        self._key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._key_edit.setEchoMode(QLineEdit.Password)
         self._key_edit.setPlaceholderText("Paste API key here...")
         self._style_input(self._key_edit)
         show_btn = QPushButton("👁")
@@ -739,7 +736,7 @@ class APIKeyManagerDialog(QDialog):
         show_btn.setStyleSheet("QPushButton{background:#3c3c3c;color:#ccc;border:1px solid #555;border-radius:3px;}"
                                "QPushButton:checked{background:#094771;}")
         show_btn.toggled.connect(lambda c: self._key_edit.setEchoMode(
-            QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password))
+            QLineEdit.Normal if c else QLineEdit.Password))
         key_row.addWidget(self._key_edit)
         key_row.addWidget(show_btn)
         key_lbl = QLabel("API Key:")
@@ -761,10 +758,10 @@ class APIKeyManagerDialog(QDialog):
         save_btn = QPushButton("💾  Save Profile")
         save_btn.setStyleSheet(self._btn_style("#0e639c", pad="8px 20px"))
         save_btn.clicked.connect(self._save_current)
-        right_lay.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        right_lay.addWidget(save_btn, alignment=Qt.AlignRight)
 
         # Close
-        close_btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_btn = QDialogButtonBox(QDialogButtonBox.Close)
         close_btn.rejected.connect(self.reject)
         right_lay.addWidget(close_btn)
 
@@ -846,8 +843,8 @@ class APIKeyManagerDialog(QDialog):
             return
         name = self._profiles[row].get("name", "?")
         reply = QMessageBox.question(self, "Delete", f"Delete profile '{name}'?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
             self._profiles.pop(row)
             self._save_profiles()
             self._refresh_list()
@@ -860,8 +857,8 @@ class VerilogIDE(QMainWindow):
         super().__init__()
         self.setWindowTitle("Verilog Studio IDE (Vivado Style)")
         self.resize(1280, 800)
-        self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
-        self.setCorner(Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
+        self.setCorner(Qt.TopRightCorner, Qt.RightDockWidgetArea)
         self.current_project_dir = None
         self.chat_history = []
         
@@ -1086,12 +1083,12 @@ class VerilogIDE(QMainWindow):
         
         # Edit Actions
         undo_act = QAction("Undo", self)
-        undo_act.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_act.setShortcut(QKeySequence.Undo)
         undo_act.triggered.connect(self.undo_edit)
         edit_menu.addAction(undo_act)
 
         redo_act = QAction("Redo", self)
-        redo_act.setShortcut(QKeySequence.StandardKey.Redo)
+        redo_act.setShortcut(QKeySequence.Redo)
         redo_act.triggered.connect(self.redo_edit)
         edit_menu.addAction(redo_act)
 
@@ -1135,18 +1132,8 @@ class VerilogIDE(QMainWindow):
         doc_act.triggered.connect(self.show_documentation)
         help_menu.addAction(doc_act)
         
-        history_act = QAction("View Change History", self)
-        history_act.triggered.connect(self.show_history)
-        view_menu.addAction(history_act)
         
-        vc_menu = menubar.addMenu("Version Control")
-        commit_all_act = QAction("Commit All", self)
-        commit_all_act.triggered.connect(lambda: self.commit_changes("All"))
-        vc_menu.addAction(commit_all_act)
         
-        commit_cur_act = QAction("Commit Current File", self)
-        commit_cur_act.triggered.connect(lambda: self.commit_changes("Current"))
-        vc_menu.addAction(commit_cur_act)
 
         # Tool Bar
         toolbar = QToolBar("Main Toolbar")
@@ -1159,11 +1146,9 @@ class VerilogIDE(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(compile_act)
         toolbar.addSeparator()
-        toolbar.addAction(commit_all_act)
-        toolbar.addAction(commit_cur_act)
 
         # Central Widget (Multi-tab Editor with Splitter)
-        self.editor_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.editor_splitter = QSplitter(Qt.Horizontal)
         
         self.editor_tabs = QTabWidget()
         self.editor_tabs.setTabsClosable(True)
@@ -1191,7 +1176,7 @@ class VerilogIDE(QMainWindow):
         for i in range(1, 4):
             self.tree_view.hideColumn(i)
         self.proj_dock.setWidget(self.tree_view)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.proj_dock)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.proj_dock)
         
         # Dock: VIO / Logic Gate Diagram
         self.vio_dock = QDockWidget("Logic Gate Diagram", self)
@@ -1199,13 +1184,13 @@ class VerilogIDE(QMainWindow):
         self.vio_dashboard = VIODashboard()
         self.vio_dashboard.parse_btn.clicked.connect(self.vio_parse_module)
         self.vio_dock.setWidget(self.vio_dashboard)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.vio_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.vio_dock)
         
         # Dock: ILA / Waveform
         self.ila_dock = QDockWidget("Integrated Logic Analyzer (ILA)", self)
         self.waveform_viewer = WaveformViewer()
         self.ila_dock.setWidget(self.waveform_viewer)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.ila_dock)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.ila_dock)
 
         # Dock: Output Console
         self.console_dock = QDockWidget("Debug Console / Terminal", self)
@@ -1256,7 +1241,7 @@ class VerilogIDE(QMainWindow):
         clear_console_btn.clicked.connect(self.console_output.clear)
 
         self.console_dock.setWidget(console_container)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.console_dock)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.console_dock)
         
         self.tabifyDockWidget(self.ila_dock, self.console_dock)
 
@@ -1265,7 +1250,7 @@ class VerilogIDE(QMainWindow):
         self.terminal_dock = QDockWidget("Terminal", self)
         self.terminal_widget = TerminalWidget()
         self.terminal_dock.setWidget(self.terminal_widget)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal_dock)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.terminal_dock)
         self.tabifyDockWidget(self.console_dock, self.terminal_dock)
         
         # Dock: AI Coding Assistant (redesigned)
@@ -1295,7 +1280,7 @@ class VerilogIDE(QMainWindow):
 
         self.ai_key_combo = QComboBox()
         self.ai_key_combo.setToolTip("Select saved API key profile")
-        self.ai_key_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.ai_key_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         row1.addWidget(self.ai_key_combo)
 
         self._ai_manage_btn = QPushButton("⚙ Keys")
@@ -1390,7 +1375,7 @@ class VerilogIDE(QMainWindow):
         ai_layout.addWidget(self._ai_input_bar)
 
         self.ai_dock.setWidget(ai_widget)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.ai_dock)
 
         # Populate key selector
         self._reload_key_combo()
@@ -1504,28 +1489,28 @@ class VerilogIDE(QMainWindow):
             text_color   = "#0d2a5e" if is_light else "#d4d4d4"
             label_text   = "You"
             label_color  = "#0d47a1" if is_light else "#4EC9B0"
-            align = Qt.AlignmentFlag.AlignRight
+            align = Qt.AlignRight
         elif role == "assistant":
             bubble_color = "#f0f4fb" if is_light else "#252526"
             border_color = "#b0c4de" if is_light else "#3a3a3a"
             text_color   = "#1a1a2e" if is_light else "#d4d4d4"
             label_text   = f"AI ({self.ai_model_combo.currentText()})"
             label_color  = "#1565c0" if is_light else "#9CDCFE"
-            align = Qt.AlignmentFlag.AlignLeft
+            align = Qt.AlignLeft
         elif role == "error":
             bubble_color = "#fdecea" if is_light else "#3a1010"
             border_color = "#e53935" if is_light else "#F44747"
             text_color   = "#8b0000" if is_light else "#d4d4d4"
             label_text   = "Error"
             label_color  = "#c62828" if is_light else "#F44747"
-            align = Qt.AlignmentFlag.AlignLeft
+            align = Qt.AlignLeft
         else:  # system
             bubble_color = "#fffde7" if is_light else "#2d2d00"
             border_color = "#f9a825" if is_light else "#888800"
             text_color   = "#4e3a00" if is_light else "#d4d4d4"
             label_text   = "System"
             label_color  = "#e65100" if is_light else "#DCDCAA"
-            align = Qt.AlignmentFlag.AlignLeft
+            align = Qt.AlignLeft
 
         # Header row: role label + timestamp
         ts_color = "#546e7a" if is_light else "#666666"
@@ -1549,7 +1534,7 @@ class VerilogIDE(QMainWindow):
         msg_lbl.document().setTextWidth(msg_lbl.viewport().width())
         doc_h = int(msg_lbl.document().size().height()) + 20
         msg_lbl.setFixedHeight(min(max(doc_h, 60), 600))
-        msg_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        msg_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         b_lay.addWidget(msg_lbl)
 
         # Insert before the trailing stretch
@@ -1719,7 +1704,6 @@ class VerilogIDE(QMainWindow):
         if dlg.exec():
             name = dlg.name_input.text().strip()
             loc = dlg.loc_input.text().strip()
-            vc_enabled = dlg.vc_checkbox.isChecked()
             
             if not name or not loc:
                 return
@@ -1727,20 +1711,10 @@ class VerilogIDE(QMainWindow):
             proj_dir = os.path.join(loc, name)
             os.makedirs(proj_dir, exist_ok=True)
             
-            proj_data = {"name": name, "vc_enabled": vc_enabled}
+            proj_data = {"name": name}
             with open(os.path.join(proj_dir, "project.json"), "w") as f:
                 json.dump(proj_data, f)
                 
-            if vc_enabled:
-                with open(os.path.join(proj_dir, ".gitignore"), "w") as f:
-                    f.write("*.vcd\n*.vvp\n__pycache__/\n")
-                subprocess.run(["git", "init"], cwd=proj_dir, capture_output=True)
-                subprocess.run(["git", "add", "."], cwd=proj_dir, capture_output=True)
-                subprocess.run(["git", "commit", "-m", "Initial project creation"], cwd=proj_dir, capture_output=True)
-                
-            self.set_project_dir(proj_dir)
-            self.console_output.appendPlainText(f"Created new project: {name} (VC: {vc_enabled})")
-            
     def open_project(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Open Project Directory")
         if dir_path:
@@ -1841,26 +1815,6 @@ class VerilogIDE(QMainWindow):
         else:
             QMessageBox.information(self, "Help", "Documentation file 'how_to_code.txt' not found in examples folder.")
 
-    def show_history(self):
-        if not self.current_project_dir:
-            QMessageBox.warning(self, "No Project", "Please open a project first.")
-            return
-        if not self.is_vc_enabled():
-            QMessageBox.warning(self, "VC Disabled", "Change tracking is disabled for this project.")
-            return
-        dlg = VersionHistoryDialog(self.current_project_dir, self)
-        dlg.exec()
-
-    def is_vc_enabled(self):
-        if not self.current_project_dir: return False
-        try:
-            with open(os.path.join(self.current_project_dir, "project.json"), "r") as f:
-                data = json.load(f)
-                return data.get("vc_enabled", False)
-        except:
-            # Check if git exists as fallback
-            return os.path.exists(os.path.join(self.current_project_dir, ".git"))
-
     def new_file(self):
         editor = CodeEditor()
         target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
@@ -1895,36 +1849,6 @@ class VerilogIDE(QMainWindow):
                     f.write(current_editor.toPlainText())
                 self.console_output.appendPlainText(f"Saved: {file_path}")
                 
-    def commit_changes(self, choice=None):
-        if not self.is_vc_enabled():
-            QMessageBox.warning(self, "VC Disabled", "Change tracking is disabled for this project.\nYou can recreate the project with Version Control enabled.")
-            return
-            
-        if choice is None:
-            options = ["Commit Current File Only", "Commit All Changed Files"]
-            choice, ok = QInputDialog.getItem(self, "Commit Options", "Select what to commit:", options, 0, False)
-            if not (ok and choice):
-                return
-        
-        msg, ok2 = QInputDialog.getText(self, "Change Tracker", f"Enter a change name for {choice}:")
-        if ok2 and msg.strip():
-            try:
-                if "All" in choice:
-                    subprocess.run(["git", "add", "."], cwd=self.current_project_dir, capture_output=True)
-                else:
-                    target_tabs = self.last_focused_tabs if not self.editor_tabs_right.isHidden() else self.editor_tabs
-                    current_editor = target_tabs.currentWidget()
-                    if current_editor and current_editor.property("file_path"):
-                        subprocess.run(["git", "add", current_editor.property("file_path")], cwd=self.current_project_dir, capture_output=True)
-                    else:
-                        QMessageBox.warning(self, "No file", "No valid file is currently active.")
-                        return
-                        
-                subprocess.run(["git", "commit", "-m", msg.strip()], cwd=self.current_project_dir, capture_output=True)
-                self.console_output.appendPlainText(f"Changes committed: {msg.strip()}")
-            except Exception as e:
-                QMessageBox.warning(self, "Git Error", f"Failed to commit. Is Git installed on your system?\n{e}")
-        
     def on_tree_double_clicked(self, index):
         file_path = self.file_system_model.filePath(index)
         if os.path.isfile(file_path):
@@ -1984,11 +1908,11 @@ class VerilogIDE(QMainWindow):
 
     def eventFilter(self, obj, event):
         """Catch Ctrl+Enter in ai_input to send message."""
-        from PyQt6.QtCore import QEvent
+        from PyQt5.QtCore import QEvent
         if (obj is self.ai_input
-                and event.type() == QEvent.Type.KeyPress
-                and event.key() == Qt.Key.Key_Return
-                and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                and event.type() == QEvent.KeyPress
+                and event.key() == Qt.Key_Return
+                and event.modifiers() & Qt.ControlModifier):
             self.ask_ai()
             return True
         return super().eventFilter(obj, event)
@@ -2103,7 +2027,7 @@ class VerilogIDE(QMainWindow):
 
         # Place cursor at the end so user can add more context
         cursor = self.ai_input.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.End)
         self.ai_input.setTextCursor(cursor)
 
         # Raise the AI dock and focus the input
