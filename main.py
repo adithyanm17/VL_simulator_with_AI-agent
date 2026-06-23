@@ -1297,15 +1297,6 @@ class VerilogIDE(QMainWindow):
         self._ai_manage_btn.clicked.connect(self.show_api_key_manager)
         row1.addWidget(self._ai_manage_btn)
 
-        self._ai_model_lbl = QLabel("🤖 Model:")
-        self._ai_model_lbl.setStyleSheet("font-size:11px;font-weight:bold;")
-        row1.addWidget(self._ai_model_lbl)
-
-        self.ai_model_combo = QComboBox()
-        self.ai_model_combo.addItems(["llama3.2", "llama3", "llama3.1", "gemma3:4b",
-                                      "qwen2.5-coder:7b", "deepseek-coder-v2", "mistral", "codellama"])
-        row1.addWidget(self.ai_model_combo)
-
         self.ai_refresh_btn = QPushButton("🔄")
         self.ai_refresh_btn.setFixedWidth(32)
         self.ai_refresh_btn.setFont(QFont("Segoe UI", 11))
@@ -1348,44 +1339,74 @@ class VerilogIDE(QMainWindow):
         self.ai_output.setVisible(False)
 
         # ── Input bar ─────────────────────────────────────────────────────────
-        self._ai_input_bar = QWidget()
-        input_bar_lay = QHBoxLayout(self._ai_input_bar)
-        input_bar_lay.setContentsMargins(8, 6, 8, 6)
-        input_bar_lay.setSpacing(6)
+        self._ai_input_bar = QFrame()
+        self._ai_input_bar.setObjectName("AIInputBar")
+        # Will be styled dynamically in apply_theme
+        
+        input_bar_lay = QVBoxLayout(self._ai_input_bar)
+        input_bar_lay.setContentsMargins(6, 6, 6, 6)
+        input_bar_lay.setSpacing(4)
+
+        # Attachments area
+        self.ai_attachments_lay = QHBoxLayout()
+        input_bar_lay.addLayout(self.ai_attachments_lay)
+
+        # Bottom row
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(6)
+
+        self.ai_attach_btn = QPushButton("➕")
+        self.ai_attach_btn.setFixedSize(32, 32)
+        self.ai_attach_btn.setToolTip("Attach Image")
+        self.ai_attach_btn.clicked.connect(self.attach_ai_image)
+        bottom_row.addWidget(self.ai_attach_btn)
+
+        self.ai_model_combo = QComboBox()
+        self.ai_model_combo.addItems(["llama3.2", "llama3", "llama3.1", "gemma3:4b",
+                                      "qwen2.5-coder:7b", "deepseek-coder-v2", "mistral", "codellama"])
+        self.ai_model_combo.setToolTip("Select Model")
+        self.ai_model_combo.setStyleSheet("QComboBox { border: none; background: transparent; padding: 2px 8px; font-weight: bold; } QComboBox::drop-down { border: none; }")
+        self.ai_model_combo.currentTextChanged.connect(self.save_ai_model_state)
+        bottom_row.addWidget(self.ai_model_combo)
 
         self.ai_input = QTextEdit()
         self.ai_input.setMaximumHeight(80)
-        self.ai_input.setMinimumHeight(44)
+        self.ai_input.setMinimumHeight(32)
         self.ai_input.setFont(QFont("Consolas", 10))
-        self.ai_input.setPlaceholderText("Message AI…  (Ctrl+Enter to send)")
+        self.ai_input.setPlaceholderText("Ask anything, @ to mention, / for actions")
         self.ai_input.installEventFilter(self)
-        input_bar_lay.addWidget(self.ai_input)
+        bottom_row.addWidget(self.ai_input)
 
-        btn_col = QVBoxLayout()
-        btn_col.setSpacing(4)
-        self.ai_send_btn = QPushButton("📨 Send")
-        self.ai_send_btn.setFixedSize(70, 34)
-        self.ai_send_btn.setFont(QFont("Segoe UI", 9))
-        self.ai_send_btn.setToolTip("Send message (Ctrl+Enter)")
-        self.ai_send_btn.clicked.connect(self.ask_ai)
+        self.ai_action_btn = QPushButton("➤")
+        self.ai_action_btn.setFixedSize(32, 32)
+        self.ai_action_btn.setToolTip("Send message")
+        self.ai_action_btn.clicked.connect(self.on_ai_action_clicked)
+        bottom_row.addWidget(self.ai_action_btn)
 
-        self.ai_stop_btn = QPushButton("⏹ Stop")
-        self.ai_stop_btn.setFixedSize(70, 34)
-        self.ai_stop_btn.setFont(QFont("Segoe UI", 9))
-        self.ai_stop_btn.setToolTip("Stop AI generation")
-        self.ai_stop_btn.clicked.connect(self.stop_ai)
-        self.ai_stop_btn.setEnabled(False)
-
-        btn_col.addWidget(self.ai_send_btn)
-        btn_col.addWidget(self.ai_stop_btn)
-        input_bar_lay.addLayout(btn_col)
+        input_bar_lay.addLayout(bottom_row)
         ai_layout.addWidget(self._ai_input_bar)
+        
+        self._current_attachments = []
+        self._ai_prompt_history = []
+        self._ai_hist_idx = -1
 
         self.ai_dock.setWidget(ai_widget)
         self.addDockWidget(Qt.RightDockWidgetArea, self.ai_dock)
 
         # Populate key selector
         self._reload_key_combo()
+
+        last_model = {}
+        try:
+            if hasattr(self, 'config_path') and os.path.exists(self.config_path):
+                import json
+                with open(self.config_path, "r") as f:
+                    config = json.load(f)
+                    last_m = config.get("last_ai_model", "")
+                    if last_m:
+                        self.ai_model_combo.setCurrentText(last_m)
+        except:
+            pass
         
         # Tabify VIO dock under AI dock (right side)
         self.tabifyDockWidget(self.ai_dock, self.vio_dock)
@@ -1580,17 +1601,101 @@ class VerilogIDE(QMainWindow):
         result = result.replace('\n', '<br>')
         return result
 
+    def attach_ai_image(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Attach Image", "", "Images (*.png *.xpm *.jpg *.jpeg *.bmp)")
+        if not file_path:
+            return
+        
+        # Read and encode to base64
+        try:
+            import base64
+            with open(file_path, "rb") as img_file:
+                b64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "Image Error", f"Failed to load image: {e}")
+            return
+            
+        # Create composite widget
+        frame = QFrame()
+        frame.setFixedSize(48, 48)
+        frame.setStyleSheet("QFrame { background: transparent; }")
+        
+        lbl = QLabel(frame)
+        from PyQt5.QtGui import QPixmap
+        pix = QPixmap(file_path)
+        lbl.setPixmap(pix.scaled(40, 40, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+        lbl.setFixedSize(40, 40)
+        lbl.move(0, 8)
+        lbl.setStyleSheet("border: 1px solid gray; border-radius: 4px; background: white;")
+        
+        close_btn = QPushButton("✕", frame)
+        close_btn.setFixedSize(16, 16)
+        close_btn.move(32, 0)
+        close_btn.setStyleSheet("QPushButton { border: none; border-radius: 8px; background: #444; color: white; font-size: 10px; font-weight: bold; } QPushButton:hover { background: red; }")
+        
+        def remove_attachment():
+            if b64 in self._current_attachments:
+                self._current_attachments.remove(b64)
+            frame.deleteLater()
+            self._update_ai_attachments_ui()
+            
+        close_btn.clicked.connect(remove_attachment)
+        self.ai_attachments_lay.addWidget(frame)
+        self._current_attachments.append(b64)
+        self._update_ai_attachments_ui()
+
+    def _update_ai_attachments_ui(self):
+        # Update visibility and styling based on count
+        has_items = len(self._current_attachments) > 0
+        if has_items:
+            self._ai_input_bar.setStyleSheet(self._ai_input_bar.styleSheet().replace("border-radius: 8px;", "border-radius: 8px; border-top: 2px solid #ccc;"))
+        else:
+            # Let apply_theme reset it next time or just basic reset
+            pass
+
+    def save_ai_model_state(self, model_name):
+        self.save_config("last_ai_model", model_name)
+
+
+    def clear_ai_attachments(self):
+        self._current_attachments.clear()
+        while self.ai_attachments_lay.count():
+            item = self.ai_attachments_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._update_ai_attachments_ui()
+
+    def on_ai_action_clicked(self):
+        if self.ai_action_btn.text() == "⏹":
+            self.stop_ai()
+        else:
+            self.ask_ai()
+
     def stop_ai(self):
         if hasattr(self, 'ai_worker') and self.ai_worker.isRunning():
             self.ai_worker.stop()
-            self.ai_send_btn.setEnabled(True)
-            self.ai_stop_btn.setEnabled(False)
+            self._set_ai_action_state("send")
             self._add_chat_bubble("Generation stopped.", "system")
+
+    def _set_ai_action_state(self, state):
+        c = self._colors if hasattr(self, '_colors') else {}
+        if state == "stop":
+            self.ai_action_btn.setText("⏹")
+            self.ai_action_btn.setToolTip("Stop AI generation")
+            self.ai_action_btn.setStyleSheet(f"QPushButton {{ border: none; border-radius: 16px; background: {c.get('error_color', '#F44747')}; color: white; font-size: 14px; }} QPushButton:hover {{ background: darkred; }}")
+        else:
+            self.ai_action_btn.setText("➤")
+            self.ai_action_btn.setToolTip("Send message")
+            self.ai_action_btn.setStyleSheet(f"QPushButton {{ border: none; border-radius: 16px; background: {c.get('input_focus', '#007acc')}; color: white; font-size: 14px; }} QPushButton:hover {{ opacity: 0.8; }}")
 
     def ask_ai(self):
         prompt = self.ai_input.toPlainText().strip()
-        if not prompt:
+        if not prompt and not self._current_attachments:
             return
+
+        if prompt and (not self._ai_prompt_history or self._ai_prompt_history[-1] != prompt):
+            self._ai_prompt_history.append(prompt)
+        self._ai_hist_idx = -1
 
         model = self.ai_model_combo.currentText() or "llama3.2"
         profile = self.get_active_key()
@@ -1602,13 +1707,17 @@ class VerilogIDE(QMainWindow):
             self._add_chat_bubble("No API key configured. Go to Edit → Manage API Keys to add one.", "error")
             return
 
-        self.ai_send_btn.setEnabled(False)
-        self.ai_stop_btn.setEnabled(True)
+        self._set_ai_action_state("stop")
         self.ai_input.clear()
 
+        # Build message payload
+        user_msg = {"role": "user", "content": prompt}
+        if self._current_attachments:
+            user_msg["images"] = list(self._current_attachments)
+        self.clear_ai_attachments()
+
         # Show user bubble
-        self._add_chat_bubble(prompt, "user")
-        # Placeholder thinking bubble
+        self._add_chat_bubble(prompt or "[Image attached]", "user")
         self._add_chat_bubble("Generating…", "system")
 
         context = ""
@@ -1634,7 +1743,7 @@ class VerilogIDE(QMainWindow):
 
         messages = ([{"role": "system", "content": system_prompt}]
                     + self.chat_history
-                    + [{"role": "user", "content": prompt}])
+                    + [user_msg])
 
         self.ai_worker = OllamaWorker(model, messages,
                                       api_key=api_key,
@@ -1645,8 +1754,8 @@ class VerilogIDE(QMainWindow):
         self.ai_worker.start()
 
     def on_ai_finished(self, response):
-        self.ai_send_btn.setEnabled(True)
-        self.ai_stop_btn.setEnabled(False)
+        self._set_ai_action_state('send')
+        
 
         # Remove the "Generating…" system bubble (last widget before stretch)
         count = self.ai_chat_layout.count()
@@ -1695,8 +1804,8 @@ class VerilogIDE(QMainWindow):
                 self._add_chat_bubble("❌ No active file to edit.", "error")
 
     def on_ai_error(self, error):
-        self.ai_send_btn.setEnabled(True)
-        self.ai_stop_btn.setEnabled(False)
+        self._set_ai_action_state('send')
+        
         # Remove "Generating…" placeholder
         count = self.ai_chat_layout.count()
         if count > 1:
