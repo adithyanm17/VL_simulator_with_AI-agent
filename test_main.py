@@ -63,8 +63,7 @@ class TestTerminalWidget(unittest.TestCase):
         exe, args = self.terminal._build_args("dir")
         self.assertEqual(exe, "cmd.exe")
         self.assertTrue(args[0] == "/c")
-        self.assertTrue("cd /d" in args[1])
-        self.assertTrue("&& dir" in args[1])
+        self.assertEqual(args[1], "dir")
 
     def test_build_args_powershell(self):
         exe, args = self.terminal._build_args("ps: ls")
